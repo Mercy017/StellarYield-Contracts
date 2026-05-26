@@ -198,7 +198,10 @@ proptest! {
         // Sanity: no balance is negative and none exceeds total supply.
         prop_assert!(bal_a >= 0 && bal_b >= 0 && bal_c >= 0, "balance went negative");
         prop_assert!(total >= 0, "total supply went negative");
-        prop_assert!(bal_a <= total && bal_b <= total && bal_c <= total, "balance exceeds total supply");
+        prop_assert!(
+            bal_a <= total && bal_b <= total && bal_c <= total,
+            "balance exceeds total supply"
+        );
     }
 }
 
