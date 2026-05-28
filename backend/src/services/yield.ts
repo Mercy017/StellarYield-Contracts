@@ -1,4 +1,5 @@
 import type { Epoch } from "../types/index.js";
+import { query } from "../db/index.js";
 
 export class YieldService {
   async getVaultEpochs(_contractId: string): Promise<Epoch[]> {
@@ -13,11 +14,16 @@ export class YieldService {
   }
 
   async recordEpoch(
-    _vaultId: number,
-    _epoch: number,
-    _yieldAmount: string,
-    _totalShares: string,
+    vaultId: number,
+    epoch: number,
+    yieldAmount: string,
+    totalShares: string,
   ): Promise<void> {
-    throw new Error("Not implemented");
+    await query(
+      `INSERT INTO epochs (vault_id, epoch, yield_amount, total_shares, distributed_at)
+       VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (vault_id, epoch) DO NOTHING`,
+      [vaultId, epoch, yieldAmount, totalShares],
+    );
   }
 }

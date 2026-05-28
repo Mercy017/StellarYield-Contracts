@@ -237,9 +237,44 @@ export class Indexer {
   }
 
   protected async _handleYieldDistributed(
-    _contractId: string,
-    _ev: rpc.Api.EventResponse,
-  ): Promise<void> {}
+    contractId: string,
+    ev: rpc.Api.EventResponse,
+  ): Promise<void> {
+    // topic: [Symbol("yield_dis"), epoch]
+    // value: [amount, timestamp]  (per SDK parse.ts convention)
+    const epoch = Number(decodeSymbol(ev.topic[1]) || 0) || (() => {
+      try { return Number(scValToNative(ev.topic[1]) ?? 0); } catch { return 0; }
+    })();
+    const data = decodeValue(ev);
+    const dataArr = Array.isArray(data) ? data : Object.values(data as Record<string, unknown>);
+    const amount = decodeBigInt(dataArr[0]);
+
+    const payload = { epoch, amount: amount.toString() };
+    await storeIndexedEvent(contractId, "yield_distributed", ev, payload).catch((err) =>
+      logger.warn(err, "Failed to store yield_distributed event"),
+    );
+
+    const vaultRow = await query<{ id: number }>(
+      "SELECT id FROM vaults WHERE contract_id = $1",
+      [contractId],
+    );
+    if (vaultRow.length === 0) {
+      logger.warn({ contractId }, "yield_distributed for unknown vault — skipping epoch record");
+      return;
+    }
+    const vaultId = vaultRow[0].id;
+
+    // Read total_supply for shares denominator
+    const supplyRow = await query<{ total_supply: string }>(
+      "SELECT total_supply FROM vaults WHERE id = $1",
+      [vaultId],
+    );
+    const totalShares = supplyRow[0]?.total_supply ?? "0";
+
+    await this._yieldService.recordEpoch(vaultId, epoch, amount.toString(), totalShares);
+
+    logger.info({ contractId, epoch, amount: amount.toString() }, "Processed yield_distributed event");
+  }
 
   // ── Ledger state persistence ───────────────────────────────────────────────
 
