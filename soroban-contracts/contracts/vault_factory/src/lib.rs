@@ -477,7 +477,8 @@ impl VaultFactory {
             .with_current_contract(salt)
             .deploy_v2(wasm_hash, (init_params,));
 
-        // Register the vault
+        // Register the vault — populate all response fields so frontends can
+        // compare vaults without extra on-chain reads (#515, #516, #517).
         let info = VaultInfo {
             vault: vault_addr.clone(),
             asset: vault_asset.clone(),
@@ -486,6 +487,12 @@ impl VaultFactory {
             symbol: symbol.clone(),
             active: true,
             created_at: e.ledger().timestamp(),
+            // #515: operator fee exposed directly in the response.
+            operator_fee_bps: early_redemption_fee_bps,
+            // #516: maturity timestamp so investors know when the vault matures.
+            maturity_date,
+            // #517: expected APY (basis points) set at creation.
+            expected_apy,
         };
         put_vault_info(e, &vault_addr, info);
         push_all_vaults(e, vault_addr.clone());
@@ -493,7 +500,16 @@ impl VaultFactory {
         push_active_vaults(e, vault_addr.clone()); // new vaults start active
         push_vaults_by_asset(e, &vault_asset, vault_addr.clone());
 
-        emit_vault_created(e, vault_addr.clone(), VaultType::SingleRwa, name, e.current_contract_address());
+        emit_vault_created(
+            e,
+            vault_addr.clone(),
+            VaultType::SingleRwa,
+            name,
+            e.current_contract_address(),
+            early_redemption_fee_bps, // #515 operator_fee_bps
+            maturity_date,            // #516 maturity_date
+            expected_apy,             // #517 expected_apy
+        );
 
         bump_instance(e);
         vault_addr
