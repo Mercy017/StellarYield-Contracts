@@ -156,4 +156,54 @@ describe("UserService", () => {
       expect(result.totalDeposited).toBe("0");
     });
   });
+
+  describe("getPortfoliosBatch", () => {
+    const ADDR_A = "GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJJBBX7UYXVXPXD5XNMJXVXA";
+    const ADDR_B = "GBRPYHIL2CI3WHZDTOOQFC6EB4KJJGUJJBBX7UYXVXPXD5XNMJXVXB";
+
+    it("groups positions by address using a single ANY query", async () => {
+      vi.mocked(db.query).mockResolvedValueOnce([
+        {
+          id: 1,
+          user_address: ADDR_A,
+          vault_id: 1,
+          contract_id: "CCONTRACT11111111111111111111111111111111111111111111",
+          state: "Active",
+          shares: "1000",
+          deposited: "5000",
+          last_claimed_epoch: 0,
+          updated_at: new Date("2024-01-01"),
+        },
+      ]);
+
+      const result = await userService.getPortfoliosBatch([ADDR_A, ADDR_B]);
+
+      expect(Object.keys(result)).toEqual([ADDR_A, ADDR_B]);
+      expect(result[ADDR_A]).toHaveLength(1);
+      expect(result[ADDR_A][0].contractId).toBe(
+        "CCONTRACT11111111111111111111111111111111111111111111",
+      );
+      // Addresses with no positions return an empty array, not undefined.
+      expect(result[ADDR_B]).toEqual([]);
+      expect(db.query).toHaveBeenCalledWith(
+        expect.stringContaining("= ANY($1)"),
+        [[ADDR_A, ADDR_B]],
+      );
+    });
+
+    it("returns empty arrays for every address when there are no positions", async () => {
+      vi.mocked(db.query).mockResolvedValueOnce([]);
+
+      const result = await userService.getPortfoliosBatch([ADDR_A, ADDR_B]);
+
+      expect(result).toEqual({ [ADDR_A]: [], [ADDR_B]: [] });
+    });
+
+    it("does not hit the database when no addresses are provided", async () => {
+      const result = await userService.getPortfoliosBatch([]);
+
+      expect(result).toEqual({});
+      expect(db.query).not.toHaveBeenCalled();
+    });
+  });
 });

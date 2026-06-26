@@ -91,6 +91,64 @@ export class UserService {
     };
   }
 
+  /**
+   * Fetch portfolio positions for many users in a single query.
+   *
+   * Returns a map keyed by the requested address. Every requested address is
+   * present in the result; addresses with no positions map to an empty array.
+   */
+  async getPortfoliosBatch(
+    addresses: string[],
+  ): Promise<Record<string, UserVaultPosition[]>> {
+    // Seed the result so addresses with no positions still return an empty array.
+    const result: Record<string, UserVaultPosition[]> = {};
+    for (const address of addresses) {
+      result[address] = [];
+    }
+
+    if (addresses.length === 0) {
+      return result;
+    }
+
+    const rows = await query<{
+      id: number;
+      user_address: string;
+      vault_id: number;
+      contract_id: string;
+      state: string;
+      shares: string;
+      deposited: string;
+      last_claimed_epoch: number;
+      updated_at: Date;
+    }>(
+      `SELECT uvp.id, uvp.user_address, uvp.vault_id, v.contract_id, v.state,
+              uvp.shares, uvp.deposited, uvp.last_claimed_epoch, uvp.updated_at
+       FROM user_vault_positions uvp
+       JOIN vaults v ON uvp.vault_id = v.id
+       WHERE uvp.user_address = ANY($1)
+       ORDER BY uvp.deposited DESC`,
+      [addresses],
+    );
+
+    for (const row of rows) {
+      const position: UserVaultPosition = {
+        id: row.id,
+        userAddress: row.user_address,
+        vaultId: row.vault_id,
+        contractId: row.contract_id,
+        state: row.state as UserVaultPosition["state"],
+        shares: row.shares || "0",
+        deposited: row.deposited || "0",
+        lastClaimedEpoch: row.last_claimed_epoch,
+        updatedAt: row.updated_at,
+      };
+      // Defensive: ANY($1) only returns requested addresses, but guard anyway.
+      (result[row.user_address] ??= []).push(position);
+    }
+
+    return result;
+  }
+
   async searchUsers(search: string): Promise<User[]> {
     const result = await query<{
       id: number;

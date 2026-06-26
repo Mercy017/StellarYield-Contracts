@@ -32,6 +32,20 @@ export async function getUserPortfolio(
   }
 }
 
+export async function getPortfoliosBatch(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const { addresses } = req.body as { addresses: string[] };
+    const portfolios = await userService.getPortfoliosBatch(addresses);
+    res.json(portfolios);
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function getUserKyc(req: Request, res: Response, next: NextFunction) {
   try {
     const verified = await readKycVerified(
