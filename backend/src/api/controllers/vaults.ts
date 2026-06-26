@@ -252,6 +252,25 @@ export async function getVaultSnapshot(req: Request, res: Response, next: NextFu
     );
     const lastIndexedAt = lastEventRows[0]?.created_at?.toISOString() ?? null;
 
+    // Compute top-10 holder concentration metric
+    const top10Rows = await query<{ top10_shares: string }>(
+      `SELECT COALESCE(SUM(shares), 0)::text AS top10_shares
+       FROM (
+         SELECT uvp.shares
+         FROM user_vault_positions uvp
+         WHERE uvp.vault_id = $1 AND uvp.shares > 0
+         ORDER BY uvp.shares DESC
+         LIMIT 10
+       ) top10`,
+      [vault.id],
+    );
+    const totalSupplyNum = parseFloat(vault.totalSupply);
+    let top10HolderSharePercent: number | null = null;
+    if (totalSupplyNum > 0) {
+      const top10Shares = parseFloat(top10Rows[0]?.top10_shares ?? "0");
+      top10HolderSharePercent = Math.round((top10Shares / totalSupplyNum) * 100 * 100) / 100;
+    }
+
     const snapshot = {
       state: vault.state,
       totalAssets: vault.totalAssets,
@@ -259,10 +278,113 @@ export async function getVaultSnapshot(req: Request, res: Response, next: NextFu
       depositorCount: vault.depositorCount,
       epochCount,
       lastIndexedAt,
+      top10HolderSharePercent,
     };
 
     setCacheHeaders(res);
     res.json(snapshot);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/v1/vaults/:contractId/holders/top?n=10
+ *
+ * Returns the top N shareholders (max 20) with rank, userAddress, shares, sharePercent.
+ * sharePercent = shares / total_supply * 100.
+ */
+export async function getVaultTopHolders(req: Request, res: Response, next: NextFunction) {
+  try {
+    const contractId = String(req.params["contractId"]);
+
+    const nParam = req.query["n"];
+    const n = Math.min(20, Math.max(1, parseInt(String(nParam ?? "10"), 10) || 10));
+
+    const vaultRows = await query<{ id: number; total_supply: string }>(
+      "SELECT id, total_supply FROM vaults WHERE contract_id = $1",
+      [contractId],
+    );
+    if (vaultRows.length === 0) {
+      res.status(404).json({ error: "NotFound", message: "Vault not found" });
+      return;
+    }
+    const { id: vaultId, total_supply } = vaultRows[0];
+    const totalSupply = parseFloat(total_supply ?? "0");
+
+    const rows = await query<{ user_address: string; shares: string }>(
+      `SELECT user_address, shares
+       FROM user_vault_positions
+       WHERE vault_id = $1 AND shares > 0
+       ORDER BY shares DESC
+       LIMIT $2`,
+      [vaultId, n],
+    );
+
+    const data = rows.map((row, index) => ({
+      rank: index + 1,
+      userAddress: row.user_address,
+      shares: row.shares,
+      sharePercent: totalSupply > 0
+        ? Math.round((parseFloat(row.shares) / totalSupply) * 100 * 10000) / 10000
+        : 0,
+    }));
+
+    setCacheHeaders(res);
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/v1/vaults/:contractId/holders?search=<partial_address>
+ *
+ * Returns holders whose address matches the search query (ILIKE).
+ * Requires at least 4 characters; returns HTTP 400 otherwise.
+ * Limited to 20 results.
+ */
+export async function getVaultHolders(req: Request, res: Response, next: NextFunction) {
+  try {
+    const contractId = String(req.params["contractId"]);
+    const search = req.query["search"];
+
+    if (typeof search !== "string" || search.length < 4) {
+      res.status(400).json({
+        error: "BadRequest",
+        message: "search query parameter is required and must be at least 4 characters",
+      });
+      return;
+    }
+
+    const vaultRows = await query<{ id: number }>(
+      "SELECT id FROM vaults WHERE contract_id = $1",
+      [contractId],
+    );
+    if (vaultRows.length === 0) {
+      res.status(404).json({ error: "NotFound", message: "Vault not found" });
+      return;
+    }
+    const vaultId = vaultRows[0].id;
+
+    const rows = await query<{ user_address: string; shares: string; deposited: string; updated_at: Date }>(
+      `SELECT user_address, shares, deposited, updated_at
+       FROM user_vault_positions
+       WHERE vault_id = $1 AND user_address ILIKE $2
+       ORDER BY shares DESC
+       LIMIT 20`,
+      [vaultId, `%${search}%`],
+    );
+
+    const data = rows.map((row) => ({
+      userAddress: row.user_address,
+      shares: row.shares,
+      deposited: row.deposited,
+      updatedAt: row.updated_at,
+    }));
+
+    setCacheHeaders(res);
+    res.json(data);
   } catch (err) {
     next(err);
   }
