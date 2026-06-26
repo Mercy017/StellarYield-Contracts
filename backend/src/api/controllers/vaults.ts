@@ -1,8 +1,11 @@
 import type { Request, Response, NextFunction } from "express";
+import { z } from "zod";
 import { VaultService } from "../../services/vault.js";
 import { readTotalAssets, readVaultState } from "../../services/stellar.js";
+import { query } from "../../db/index.js";
 
 const vaultService = new VaultService();
+const contractAddressSchema = z.string().length(56).regex(/^C[A-Z2-7]{55}$/);
 
 function setCacheHeaders(res: Response): void {
   res.set("Cache-Control", "max-age=10, stale-while-revalidate=60");
@@ -97,6 +100,7 @@ export async function getVaultPositions(req: Request, res: Response, next: NextF
     next(err);
   }
 }
+
 export async function getRedemptionQueue(req: Request, res: Response, next: NextFunction) {
   try {
     const vault = await vaultService.getVault(String(req.params["contractId"]));
@@ -107,6 +111,192 @@ export async function getRedemptionQueue(req: Request, res: Response, next: Next
     const queue = await vaultService.getRedemptionQueue(String(req.params["contractId"]));
     setCacheHeaders(res);
     res.json(queue);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/v1/vaults/:contractId/snapshot
+ *
+ * Returns a point-in-time read-only aggregate of vault state.
+ * Includes: state, totalAssets, totalSupply, depositorCount, epochCount, lastIndexedAt
+ */
+export async function getVaultSnapshot(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = contractAddressSchema.safeParse(req.params["contractId"]);
+    if (!parsed.success) {
+      res.status(400).json({ error: "BadRequest", message: "Invalid contractId format" });
+      return;
+    }
+    const contractId = parsed.data;
+
+    const vault = await vaultService.getVault(contractId);
+    if (!vault) {
+      res.status(404).json({ error: "NotFound", message: "Vault not found" });
+      return;
+    }
+
+    // Get epoch count for this vault
+    const epochRows = await query<{ count: string }>(
+      "SELECT COUNT(*)::text as count FROM epochs WHERE vault_id = $1",
+      [vault.id],
+    );
+    const epochCount = parseInt(epochRows[0]?.count ?? "0", 10);
+
+    // Get last indexed event timestamp for this vault
+    const lastEventRows = await query<{ created_at: Date }>(
+      "SELECT created_at FROM indexed_events WHERE contract_id = $1 ORDER BY created_at DESC LIMIT 1",
+      [contractId],
+    );
+    const lastIndexedAt = lastEventRows[0]?.created_at?.toISOString() ?? null;
+
+    const snapshot = {
+      state: vault.state,
+      totalAssets: vault.totalAssets,
+      totalSupply: vault.totalSupply,
+      depositorCount: vault.depositorCount,
+      epochCount,
+      lastIndexedAt,
+    };
+
+    setCacheHeaders(res);
+    res.json(snapshot);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * GET /api/v1/vaults/:contractId/tvl-history
+ *
+ * Returns TVL snapshots in the requested time range.
+ * Query params:
+ *   - from: ISO datetime (optional)
+ *   - to: ISO datetime (optional)
+ *
+ * Response is capped at 500 data points and bucketed by hour if range > 48 hours.
+ */
+export async function getVaultTvlHistory(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = contractAddressSchema.safeParse(req.params["contractId"]);
+    if (!parsed.success) {
+      res.status(400).json({ error: "BadRequest", message: "Invalid contractId format" });
+      return;
+    }
+    const contractId = parsed.data;
+
+    // Parse query parameters
+    const fromParam = req.query.from as string | undefined;
+    const toParam = req.query.to as string | undefined;
+
+    let fromDate: Date | null = null;
+    let toDate: Date | null = null;
+
+    if (fromParam) {
+      fromDate = new Date(fromParam);
+      if (isNaN(fromDate.getTime())) {
+        res.status(400).json({ error: "BadRequest", message: "Invalid from date format" });
+        return;
+      }
+    }
+
+    if (toParam) {
+      toDate = new Date(toParam);
+      if (isNaN(toDate.getTime())) {
+        res.status(400).json({ error: "BadRequest", message: "Invalid to date format" });
+        return;
+      }
+    }
+
+    // Get vault ID
+    const vaultRow = await query<{ id: number }>(
+      "SELECT id FROM vaults WHERE contract_id = $1",
+      [contractId],
+    );
+    if (vaultRow.length === 0) {
+      res.status(404).json({ error: "NotFound", message: "Vault not found" });
+      return;
+    }
+    const vaultId = vaultRow[0].id;
+
+    // Build query
+    const whereConditions: string[] = ["vault_id = $1"];
+    const params: any[] = [vaultId];
+
+    if (fromDate) {
+      whereConditions.push(`recorded_at >= $${params.length + 1}`);
+      params.push(fromDate);
+    }
+    if (toDate) {
+      whereConditions.push(`recorded_at <= $${params.length + 1}`);
+      params.push(toDate);
+    }
+
+    const whereClause = whereConditions.join(" AND ");
+
+    // Determine if we need to bucket by hour
+    let needsBucketing = false;
+    let hourDiff = 0;
+
+    if (fromDate && toDate) {
+      hourDiff = Math.abs((toDate.getTime() - fromDate.getTime()) / (1000 * 60 * 60));
+      needsBucketing = hourDiff > 48;
+    }
+
+    let rows;
+    if (needsBucketing) {
+      // Bucket by hour: select one snapshot per hour (the latest one)
+      rows = await query<{
+        total_assets: string;
+        total_supply: string;
+        recorded_at: Date;
+      }>(
+        `SELECT 
+           total_assets, 
+           total_supply,
+           recorded_at
+         FROM vault_tvl_snapshots
+         WHERE ${whereClause}
+         ORDER BY recorded_at ASC
+         LIMIT 500`,
+        params,
+      );
+
+      // Client-side bucketing: group snapshots by hour and take the last one of each hour
+      const buckets = new Map<number, typeof rows[number]>();
+      for (const row of rows) {
+        const hourKey = Math.floor(row.recorded_at.getTime() / (1000 * 60 * 60));
+        buckets.set(hourKey, row);
+      }
+      rows = Array.from(buckets.values()).sort(
+        (a, b) => a.recorded_at.getTime() - b.recorded_at.getTime(),
+      );
+    } else {
+      // No bucketing: return all snapshots, limited to 500
+      rows = await query<{
+        total_assets: string;
+        total_supply: string;
+        recorded_at: Date;
+      }>(
+        `SELECT total_assets, total_supply, recorded_at
+         FROM vault_tvl_snapshots
+         WHERE ${whereClause}
+         ORDER BY recorded_at ASC
+         LIMIT 500`,
+        params,
+      );
+    }
+
+    // Transform response
+    const data = rows.map((row) => ({
+      totalAssets: row.total_assets,
+      totalSupply: row.total_supply,
+      recordedAt: row.recorded_at.toISOString(),
+    }));
+
+    setCacheHeaders(res);
+    res.json(data);
   } catch (err) {
     next(err);
   }

@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { query } from "../../db/index.js";
 import { indexer } from "../../services/indexerSingleton.js";
+import { logger } from "../../logger.js";
 import { z } from "zod";
 
 const contractAddressSchema = z.string().length(56).regex(/^C[A-Z2-7]{55}$/);
@@ -32,6 +33,68 @@ export async function getAdminIndexer(_req: Request, res: Response, next: NextFu
     const eventsIndexed = await indexer.getEventsIndexedCount();
 
     res.json({ running, lastLedger, lastTickAt, eventsIndexed });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function backfillIndexer(req: Request, res: Response, next: NextFunction) {
+  try {
+    const backfillSchema = z.object({
+      fromLedger: z.number().int().min(0),
+      toLedger: z.number().int().min(0),
+    });
+
+    const parsed = backfillSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "BadRequest", message: "Invalid request body" });
+      return;
+    }
+
+    const { fromLedger, toLedger } = parsed.data;
+
+    if (fromLedger >= toLedger) {
+      res.status(400).json({ error: "BadRequest", message: "fromLedger must be less than toLedger" });
+      return;
+    }
+
+    if (toLedger - fromLedger > 10000) {
+      res.status(400).json({ error: "BadRequest", message: "Range cannot exceed 10000 ledgers" });
+      return;
+    }
+
+    // Queue the backfill asynchronously (non-blocking)
+    indexer.queueBackfill(fromLedger, toLedger).catch((err) => {
+      logger.error({ err }, "Backfill error");
+    });
+
+    // Return 202 Accepted immediately
+    res.status(202).json({ queued: true, fromLedger, toLedger });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function deleteApiKey(req: Request, res: Response, next: NextFunction) {
+  try {
+    const keyId = req.params["id"];
+    const idNum = parseInt(keyId, 10);
+
+    if (isNaN(idNum) || idNum <= 0) {
+      res.status(400).json({ error: "BadRequest", message: "Invalid key ID" });
+      return;
+    }
+
+    const rows = await query<{ id: number }>("SELECT id FROM api_keys WHERE id = $1", [idNum]);
+
+    if (rows.length === 0) {
+      res.status(404).json({ error: "NotFound", message: "API key not found" });
+      return;
+    }
+
+    await query("DELETE FROM api_keys WHERE id = $1", [idNum]);
+
+    res.status(204).send();
   } catch (err) {
     next(err);
   }
