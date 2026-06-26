@@ -5,6 +5,7 @@ import { query } from "../db/index.js";
 import { getSorobanRpc } from "./stellar.js";
 import { VaultService } from "./vault.js";
 import { NotificationService } from "./notifications.js";
+import { indexerEventsProcessedTotal, indexerLastLedger } from "./metrics.js";
 
 // ── Upstream helpers ───────────────────────────────────────────────────────────
 
@@ -236,6 +237,8 @@ export class Indexer {
       await this.processEvent(event);
     }
 
+    await this.notificationService?.processRetries();
+
     this.lastLedger = latestLedger;
     await this.persistLastLedger();
     this.lastTickAt = new Date();
@@ -386,6 +389,20 @@ export class Indexer {
       await this.recordEvent(event, "yield_claimed_partial");
       return;
     }
+
+    const earlyProcessed = parseEarlyRedemptionProcessedEvent(event);
+    if (earlyProcessed) {
+      await this.handleEarlyRedemptionProcessed(event.contractId ?? "", earlyProcessed);
+      await this.recordEvent(event, "early_redemption_processed");
+      return;
+    }
+
+    const earlyCancelled = parseEarlyRedemptionCancelledEvent(event);
+    if (earlyCancelled) {
+      await this.handleEarlyRedemptionCancelled(event.contractId ?? "", earlyCancelled);
+      await this.recordEvent(event, "early_redemption_cancelled");
+      return;
+    }
   }
 
   isRunning(): boolean {
@@ -521,9 +538,59 @@ export class Indexer {
     logger.info({ contractId, userAddress, epoch }, "Processed yield_claimed event");
   }
 
+  private async handleEarlyRedemptionProcessed(
+    contractId: string,
+    event: ParsedEarlyRedemptionProcessedEvent,
+  ): Promise<void> {
+    const vaultRow = await query<{ id: number }>(
+      "SELECT id FROM vaults WHERE contract_id = $1",
+      [contractId],
+    );
+    if (vaultRow.length === 0) {
+      logger.warn({ contractId }, "early_redemption_processed for unknown vault — skipping");
+      return;
+    }
+    const vaultId = vaultRow[0].id;
+
+    await query(
+      `UPDATE redemption_requests SET processed = TRUE
+       WHERE vault_id = $1 AND request_id = $2 AND processed = FALSE`,
+      [vaultId, event.requestId],
+    );
+    logger.info(
+      { contractId, user: event.user, requestId: event.requestId },
+      "Processed early_redemption_processed event",
+    );
+  }
+
+  private async handleEarlyRedemptionCancelled(
+    contractId: string,
+    event: ParsedEarlyRedemptionCancelledEvent,
+  ): Promise<void> {
+    const vaultRow = await query<{ id: number }>(
+      "SELECT id FROM vaults WHERE contract_id = $1",
+      [contractId],
+    );
+    if (vaultRow.length === 0) {
+      logger.warn({ contractId }, "early_redemption_cancelled for unknown vault — skipping");
+      return;
+    }
+    const vaultId = vaultRow[0].id;
+
+    await query(
+      `UPDATE redemption_requests SET processed = TRUE
+       WHERE vault_id = $1 AND request_id = $2 AND processed = FALSE`,
+      [vaultId, event.requestId],
+    );
+    logger.info(
+      { contractId, user: event.user, requestId: event.requestId },
+      "Processed early_redemption_cancelled event",
+    );
+  }
+
   private async handleRequestEarlyRedemption(
     contractId: string,
-    redemptionRequest: { userAddress: string; shares: bigint; timestamp: bigint },
+    redemptionRequest: { userAddress: string; requestId: number; shares: bigint; timestamp: bigint },
   ): Promise<void> {
     const vaultRow = await query<{ id: number }>(
       "SELECT id FROM vaults WHERE contract_id = $1",
@@ -539,13 +606,13 @@ export class Indexer {
     const requestTime = new Date(Number(redemptionRequest.timestamp) * 1000);
 
     await query(
-      `INSERT INTO redemption_requests (vault_id, user_address, shares, request_time, processed)
-       VALUES ($1, $2, $3, $4, FALSE)
-       ON CONFLICT (vault_id, user_address, request_time) DO NOTHING`,
-      [vaultId, redemptionRequest.userAddress, redemptionRequest.shares.toString(), requestTime],
+      `INSERT INTO redemption_requests (vault_id, user_address, shares, request_id, request_time, processed)
+       VALUES ($1, $2, $3, $4, $5, FALSE)
+       ON CONFLICT (vault_id, user_address, request_time) DO UPDATE SET request_id = EXCLUDED.request_id`,
+      [vaultId, redemptionRequest.userAddress, redemptionRequest.shares.toString(), redemptionRequest.requestId, requestTime],
     );
     logger.info(
-      { contractId, userAddress: redemptionRequest.userAddress, shares: redemptionRequest.shares.toString() },
+      { contractId, userAddress: redemptionRequest.userAddress, shares: redemptionRequest.shares.toString(), requestId: redemptionRequest.requestId },
       "Processed request_early_redemption event",
     );
   }
@@ -563,10 +630,12 @@ export class Indexer {
         JSON.stringify(event),
       ],
     );
+    indexerEventsProcessedTotal.inc();
   }
 
   private async persistLastLedger(): Promise<void> {
     await this.saveLastIndexedLedger(this.lastLedger);
+    indexerLastLedger.set(this.lastLedger);
   }
 
   async getLastIndexedLedger(): Promise<number> {
@@ -867,6 +936,7 @@ export function parseVaultCreatedEvent(rawEvent: any): {
 }
 export interface ParsedRequestEarlyRedemptionEvent {
   userAddress: string;
+  requestId: number;
   shares: bigint;
   timestamp: bigint;
 }
@@ -893,16 +963,103 @@ export function parseRequestEarlyRedemptionEvent(rawEvent: unknown): ParsedReque
     } catch {
       return null;
     }
-    if (eventName !== "request_early_redemption") return null;
+    if (eventName !== "erq_req" && eventName !== "request_early_redemption") return null;
 
     const userAddress = String(scValToNative(parsedTopics[1]) ?? "");
 
     const data = scValToNative(parsedValue as xdr.ScVal);
     const arr = Array.isArray(data) ? data : Object.values((data as Record<string, unknown>) ?? {});
-    const shares = decodeBigInt(arr[0]);
-    const timestamp = decodeBigInt(arr[1]);
+    const requestId = Number(decodeBigInt(arr[0]));
+    const shares = decodeBigInt(arr[1]);
+    const timestamp = decodeBigInt(arr[2] ?? 0n);
 
-    return { userAddress, shares, timestamp };
+    return { userAddress, requestId, shares, timestamp };
+  } catch {
+    return null;
+  }
+}
+
+export interface ParsedEarlyRedemptionProcessedEvent {
+  user: string;
+  requestId: number;
+  netAssets: bigint;
+}
+
+export function parseEarlyRedemptionProcessedEvent(rawEvent: unknown): ParsedEarlyRedemptionProcessedEvent | null {
+  try {
+    if (!rawEvent || typeof rawEvent !== "object") return null;
+    const ev = rawEvent as Record<string, unknown>;
+    const topics = (ev["topic"] ?? ev["topics"]) as unknown[] | undefined;
+    const value = ev["value"] ?? ev["data"];
+
+    if (!Array.isArray(topics) || topics.length < 2 || value == null) return null;
+
+    const parsedTopics = topics.map((t) =>
+      typeof t === "string" ? xdr.ScVal.fromXDR(t, "base64") : (t as xdr.ScVal),
+    );
+    const parsedValue = typeof value === "string"
+      ? xdr.ScVal.fromXDR(value, "base64")
+      : value;
+
+    let eventName: string;
+    try {
+      eventName = String(scValToNative(parsedTopics[0]) ?? "");
+    } catch {
+      return null;
+    }
+    if (eventName !== "erq_done" && eventName !== "early_redemption_processed") return null;
+
+    const user = String(scValToNative(parsedTopics[1]) ?? "");
+
+    const data = scValToNative(parsedValue as xdr.ScVal);
+    const arr = Array.isArray(data) ? data : Object.values((data as Record<string, unknown>) ?? {});
+    const requestId = Number(decodeBigInt(arr[0]));
+    const netAssets = decodeBigInt(arr[1]);
+
+    return { user, requestId, netAssets };
+  } catch {
+    return null;
+  }
+}
+
+export interface ParsedEarlyRedemptionCancelledEvent {
+  user: string;
+  requestId: number;
+  shares: bigint;
+}
+
+export function parseEarlyRedemptionCancelledEvent(rawEvent: unknown): ParsedEarlyRedemptionCancelledEvent | null {
+  try {
+    if (!rawEvent || typeof rawEvent !== "object") return null;
+    const ev = rawEvent as Record<string, unknown>;
+    const topics = (ev["topic"] ?? ev["topics"]) as unknown[] | undefined;
+    const value = ev["value"] ?? ev["data"];
+
+    if (!Array.isArray(topics) || topics.length < 2 || value == null) return null;
+
+    const parsedTopics = topics.map((t) =>
+      typeof t === "string" ? xdr.ScVal.fromXDR(t, "base64") : (t as xdr.ScVal),
+    );
+    const parsedValue = typeof value === "string"
+      ? xdr.ScVal.fromXDR(value, "base64")
+      : value;
+
+    let eventName: string;
+    try {
+      eventName = String(scValToNative(parsedTopics[0]) ?? "");
+    } catch {
+      return null;
+    }
+    if (eventName !== "erq_can" && eventName !== "erq_can2" && eventName !== "early_redemption_cancelled") return null;
+
+    const user = String(scValToNative(parsedTopics[1]) ?? "");
+
+    const data = scValToNative(parsedValue as xdr.ScVal);
+    const arr = Array.isArray(data) ? data : Object.values((data as Record<string, unknown>) ?? {});
+    const requestId = Number(decodeBigInt(arr[0]));
+    const shares = decodeBigInt(arr[1]);
+
+    return { user, requestId, shares };
   } catch {
     return null;
   }
