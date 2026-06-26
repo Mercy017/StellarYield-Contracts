@@ -402,6 +402,7 @@ export class Indexer {
          updated_at = NOW()`,
       [deposit.receiver, deposit.shares.toString(), deposit.assets.toString(), contractId],
     );
+    await this.recordTvlSnapshot(contractId);
     logger.info(
       { contractId, receiver: deposit.receiver, shares: deposit.shares.toString() },
       "Processed deposit event",
@@ -422,6 +423,7 @@ export class Indexer {
          updated_at = NOW()`,
       [withdraw.owner, withdraw.shares.toString(), withdraw.assets.toString(), contractId],
     );
+    await this.recordTvlSnapshot(contractId);
     logger.info(
       { contractId, owner: withdraw.owner, shares: withdraw.shares.toString() },
       "Processed withdraw event",
@@ -454,6 +456,7 @@ export class Indexer {
        ON CONFLICT (vault_id, epoch) DO NOTHING`,
       [vaultId, yieldDist.epoch, yieldDist.amount.toString(), totalShares],
     );
+    await this.recordTvlSnapshot(contractId);
     logger.info(
       { contractId, epoch: yieldDist.epoch, amount: yieldDist.amount.toString() },
       "Processed yield_distributed event",
@@ -561,6 +564,45 @@ export class Indexer {
       const delayMs = Math.min(stepMs, remaining);
       await wait(delayMs);
       remaining -= delayMs;
+    }
+  }
+
+  /**
+   * Queue a backfill range to be processed on the next indexer tick.
+   * For admin-triggered backfills after RPC outages.
+   */
+  async queueBackfill(fromLedger: number, toLedger: number): Promise<void> {
+    if (fromLedger >= toLedger) {
+      throw new Error("fromLedger must be less than toLedger");
+    }
+    if (toLedger - fromLedger > 10000) {
+      throw new Error("Backfill range cannot exceed 10000 ledgers");
+    }
+
+    logger.info({ fromLedger, toLedger }, "Admin backfill queued");
+    await this.backfill(toLedger);
+  }
+
+  /**
+   * Record a TVL snapshot for a vault contract.
+   * Called after deposit, withdraw, or yield_distributed events.
+   */
+  private async recordTvlSnapshot(contractId: string): Promise<void> {
+    try {
+      const vaultRow = await query<{ id: number; total_assets: string; total_supply: string }>(
+        "SELECT id, total_assets, total_supply FROM vaults WHERE contract_id = $1",
+        [contractId],
+      );
+      if (vaultRow.length === 0) return;
+
+      const { id: vaultId, total_assets: totalAssets, total_supply: totalSupply } = vaultRow[0];
+      await query(
+        `INSERT INTO vault_tvl_snapshots (vault_id, total_assets, total_supply, recorded_at)
+         VALUES ($1, $2, $3, NOW())`,
+        [vaultId, totalAssets, totalSupply],
+      );
+    } catch (err) {
+      logger.warn({ err, contractId }, "Failed to record TVL snapshot");
     }
   }
 }

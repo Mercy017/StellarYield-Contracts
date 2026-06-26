@@ -9,6 +9,8 @@ import {
   getVaultLiveTotalAssets,
   getVaultPositions,
   getRedemptionQueue,
+  getVaultSnapshot,
+  getVaultTvlHistory,
 } from "../controllers/vaults.js";
 import { validateParams, validateQuery } from "../middleware/validate.js";
 
@@ -38,3 +40,7 @@ vaultsRouter.get("/factory/:factoryId", validateParams(vaultFactoryParamsSchema)
 vaultsRouter.get("/:contractId/state/live", validateParams(vaultParamsSchema), getVaultLiveState);
 vaultsRouter.get("/:contractId/total-assets/live", validateParams(vaultParamsSchema), getVaultLiveTotalAssets);
 vaultsRouter.get("/:contractId/redemption-queue", validateParams(vaultParamsSchema), getRedemptionQueue);
+// Get vault snapshot: GET /api/v1/vaults/:contractId/snapshot
+vaultsRouter.get("/:contractId/snapshot", validateParams(vaultParamsSchema), getVaultSnapshot);
+// Get vault TVL history: GET /api/v1/vaults/:contractId/tvl-history
+vaultsRouter.get("/:contractId/tvl-history", validateParams(vaultParamsSchema), getVaultTvlHistory);
