@@ -3,17 +3,29 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../../db/index.js", () => ({ query: vi.fn() }));
 vi.mock("../../services/notifications.js", () => ({
   validateWebhookUrl: vi.fn().mockResolvedValue(undefined),
-  NotificationService: vi.fn().mockImplementation(() => ({})),
+  NotificationService: vi.fn().mockImplementation(() => ({
+    isGloballyEnabled: vi.fn().mockResolvedValue(true),
+    setGloballyEnabled: vi.fn().mockResolvedValue(undefined),
+  })),
 }));
 
 async function getTestContext() {
   const { query } = await import("../../db/index.js");
-  const { createWebhook, listWebhooks, deleteWebhook } = await import("./webhooks.js");
+  const { NotificationService } = await import("../../services/notifications.js");
+  const { createWebhook, listWebhooks, deleteWebhook, getGlobalOptOut, setGlobalOptOut } =
+    await import("./webhooks.js");
   return {
     query: query as ReturnType<typeof vi.fn>,
     createWebhook,
     listWebhooks,
     deleteWebhook,
+    getGlobalOptOut,
+    setGlobalOptOut,
+    // The controller module constructs its own `notificationService` instance
+    // at import time from the mocked constructor above; grab that same
+    // instance so tests can assert against it.
+    notificationServiceInstance: (NotificationService as unknown as ReturnType<typeof vi.fn>).mock
+      .results[0]?.value,
   };
 }
 
@@ -163,6 +175,34 @@ describe("Webhook Controller", () => {
         expect.stringContaining("active = FALSE"),
         [5],
       );
+    });
+  });
+
+  describe("global opt-out (#994)", () => {
+    it("getGlobalOptOut returns the current state", async () => {
+      const { getGlobalOptOut, notificationServiceInstance } = await getTestContext();
+      notificationServiceInstance.isGloballyEnabled.mockResolvedValue(false);
+
+      const req = {} as any;
+      const res = { json: vi.fn() } as any;
+      const next = vi.fn();
+
+      await getGlobalOptOut(req, res, next);
+
+      expect(res.json).toHaveBeenCalledWith({ notificationsEnabled: false });
+    });
+
+    it("setGlobalOptOut persists the new state and echoes it back", async () => {
+      const { setGlobalOptOut, notificationServiceInstance } = await getTestContext();
+
+      const req = { body: { enabled: false } } as any;
+      const res = { json: vi.fn() } as any;
+      const next = vi.fn();
+
+      await setGlobalOptOut(req, res, next);
+
+      expect(notificationServiceInstance.setGloballyEnabled).toHaveBeenCalledWith(false);
+      expect(res.json).toHaveBeenCalledWith({ notificationsEnabled: false });
     });
   });
 });
