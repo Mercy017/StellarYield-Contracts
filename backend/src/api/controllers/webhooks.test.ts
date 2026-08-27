@@ -1,17 +1,26 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../../db/index.js", () => ({ query: vi.fn() }));
-vi.mock("../../services/notifications.js", () => ({
-  validateWebhookUrl: vi.fn().mockResolvedValue(undefined),
-  NotificationService: vi.fn().mockImplementation(() => ({
+vi.mock("../../services/notifications.js", () => {
+  // A single shared fake instance, returned by every `new NotificationService()`
+  // call. `vi.clearAllMocks()` in beforeEach resets call history on these
+  // fns but not their `mockResolvedValue`, and — critically — this object
+  // reference survives that reset, unlike reading it back out of
+  // `NotificationService.mock.results` (which clearAllMocks empties).
+  const notificationServiceInstance = {
     isGloballyEnabled: vi.fn().mockResolvedValue(true),
     setGloballyEnabled: vi.fn().mockResolvedValue(undefined),
-  })),
-}));
+  };
+  return {
+    validateWebhookUrl: vi.fn().mockResolvedValue(undefined),
+    NotificationService: vi.fn().mockImplementation(() => notificationServiceInstance),
+    __mockNotificationServiceInstance: notificationServiceInstance,
+  };
+});
 
 async function getTestContext() {
   const { query } = await import("../../db/index.js");
-  const { NotificationService } = await import("../../services/notifications.js");
+  const notificationsModule = await import("../../services/notifications.js");
   const { createWebhook, listWebhooks, deleteWebhook, getGlobalOptOut, setGlobalOptOut } =
     await import("./webhooks.js");
   return {
@@ -21,11 +30,14 @@ async function getTestContext() {
     deleteWebhook,
     getGlobalOptOut,
     setGlobalOptOut,
-    // The controller module constructs its own `notificationService` instance
-    // at import time from the mocked constructor above; grab that same
-    // instance so tests can assert against it.
-    notificationServiceInstance: (NotificationService as unknown as ReturnType<typeof vi.fn>).mock
-      .results[0]?.value,
+    notificationServiceInstance: (
+      notificationsModule as unknown as {
+        __mockNotificationServiceInstance: {
+          isGloballyEnabled: ReturnType<typeof vi.fn>;
+          setGloballyEnabled: ReturnType<typeof vi.fn>;
+        };
+      }
+    ).__mockNotificationServiceInstance,
   };
 }
 
