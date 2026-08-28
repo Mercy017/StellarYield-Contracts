@@ -50,6 +50,7 @@ describe("Webhook Controller", () => {
         consecutiveFailures: 0,
         priority: 0,
         fallbackChannel: null,
+        maxPerHour: null,
         createdAt: row.created_at,
       });
     });
@@ -68,7 +69,7 @@ describe("Webhook Controller", () => {
 
       expect(query).toHaveBeenCalledWith(
         expect.stringContaining("INSERT INTO webhooks"),
-        ["https://example.com/hook", ["deposit"], null, "webhook", 0],
+        ["https://example.com/hook", ["deposit"], null, "webhook", 0, null],
       );
     });
 

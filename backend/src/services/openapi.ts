@@ -493,9 +493,9 @@ function registerPaths(): void {
     path: "/api/v1/webhooks",
     summary: "Create webhook (requires API key)",
     tags: ["Webhooks"],
-    request: { body: { content: { "application/json": { schema: z.object({ url: z.string(), events: z.array(z.string()), secret: z.string().optional(), priority: z.number().int().optional() }) } } } },
+    request: { body: { content: { "application/json": { schema: z.object({ url: z.string(), events: z.array(z.string()), secret: z.string().optional(), priority: z.number().int().optional(), maxPerHour: z.number().int().positive().nullable().optional() }) } } } },
     responses: {
-      201: { description: "Webhook created", content: { "application/json": { schema: z.object({ id: z.number(), url: z.string(), events: z.array(z.string()), active: z.boolean(), createdAt: z.string(), priority: z.number(), fallbackChannel: z.number().nullable() }) } } },
+      201: { description: "Webhook created", content: { "application/json": { schema: z.object({ id: z.number(), url: z.string(), events: z.array(z.string()), active: z.boolean(), createdAt: z.string(), priority: z.number(), fallbackChannel: z.number().nullable(), maxPerHour: z.number().nullable() }) } } },
     },
   });
 
@@ -505,7 +505,7 @@ function registerPaths(): void {
     summary: "List webhooks (requires API key), ordered by priority ascending",
     tags: ["Webhooks"],
     responses: {
-      200: { description: "List of webhooks", content: { "application/json": { schema: z.array(z.object({ id: z.number(), url: z.string(), events: z.array(z.string()), active: z.boolean(), createdAt: z.string(), priority: z.number(), fallbackChannel: z.number().nullable() })) } } },
+      200: { description: "List of webhooks", content: { "application/json": { schema: z.array(z.object({ id: z.number(), url: z.string(), events: z.array(z.string()), active: z.boolean(), createdAt: z.string(), priority: z.number(), fallbackChannel: z.number().nullable(), maxPerHour: z.number().nullable() })) } } },
     },
   });
 
