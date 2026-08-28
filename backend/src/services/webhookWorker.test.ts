@@ -18,7 +18,14 @@ vi.mock("./sse.js", () => ({
   },
 }));
 
+vi.mock("./webhookThrottle.js", () => ({
+  isWebhookThrottled: vi.fn().mockResolvedValue(false),
+}));
+
 import { query } from "../db/index.js";
+import { isWebhookThrottled } from "./webhookThrottle.js";
+
+const mockIsThrottled = isWebhookThrottled as ReturnType<typeof vi.fn>;
 
 const mockQuery = query as ReturnType<typeof vi.fn>;
 
@@ -114,6 +121,30 @@ describe("processWebhookDelivery", () => {
       durationMs: expect.any(Number),
       success: true,
     });
+  });
+
+  it("skips delivery without recording a failure when throttled (#1022)", async () => {
+    const { processWebhookDelivery } = await import("./webhookWorker.js");
+
+    mockQuery.mockResolvedValueOnce([
+      {
+        id: 5,
+        url: "https://example.com/hook",
+        events: ["deposit"],
+        secret: null,
+        consecutive_failures: 0,
+        max_per_hour: 100,
+      },
+    ]);
+    mockIsThrottled.mockResolvedValueOnce(true);
+
+    const boss = makeBossMock();
+    await processWebhookDelivery(boss, 5, '{"event":"deposit"}');
+
+    expect(mockIsThrottled).toHaveBeenCalledWith(5, 100);
+    expect(fetch).not.toHaveBeenCalled();
+    // Only the initial SELECT ran — no failure bookkeeping.
+    expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
   it("returns early when webhook not found", async () => {

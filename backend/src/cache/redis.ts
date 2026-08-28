@@ -33,6 +33,23 @@ export async function cacheSet(key: string, value: unknown, ttlSeconds: number):
   }
 }
 
+/**
+ * Atomically increment an integer counter and, on first creation, attach a TTL.
+ * Returns the post-increment value, or `null` when Redis is unavailable so
+ * callers can decide how to degrade (see {@link isWebhookThrottled}).
+ */
+export async function incrementCounter(key: string, ttlSeconds: number): Promise<number | null> {
+  try {
+    const redis = getClient();
+    if (!redis) return null;
+    const count = await redis.incr(key);
+    if (count === 1) await redis.expire(key, ttlSeconds);
+    return count;
+  } catch {
+    return null;
+  }
+}
+
 export async function cacheDel(pattern: string): Promise<void> {
   try {
     const redis = getClient();

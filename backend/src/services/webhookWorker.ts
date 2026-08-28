@@ -4,6 +4,7 @@ import { query } from "../db/index.js";
 import { logger } from "../logger.js";
 import { sseService } from "./sse.js";
 import { validateWebhookUrl } from "./notifications.js";
+import { isWebhookThrottled } from "./webhookThrottle.js";
 
 const MAX_CONSECUTIVE_FAILURES = 10;
 
@@ -13,6 +14,7 @@ interface WebhookRow {
   events: string[];
   secret: string | null;
   consecutive_failures: number;
+  max_per_hour: number | null;
 }
 
 export async function processWebhookDelivery(
@@ -21,11 +23,18 @@ export async function processWebhookDelivery(
   payload: string,
 ): Promise<void> {
   const webhookRows = await query<WebhookRow>(
-    "SELECT id, url, events, secret, consecutive_failures FROM webhooks WHERE id = $1",
+    "SELECT id, url, events, secret, consecutive_failures, max_per_hour FROM webhooks WHERE id = $1",
     [webhookId],
   );
   if (webhookRows.length === 0) return;
   const webhook = webhookRows[0];
+
+  // Per-event throttle (#1022): once a webhook has received max_per_hour
+  // deliveries within the current clock hour, drop further events until the
+  // hour rolls over. Not counted as a delivery failure.
+  if (await isWebhookThrottled(webhook.id, webhook.max_per_hour)) {
+    return;
+  }
 
   try {
     await validateWebhookUrl(webhook.url);

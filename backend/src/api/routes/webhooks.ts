@@ -39,6 +39,9 @@ const createWebhookSchema = z.object({
   channel: z.enum(KNOWN_CHANNELS).default("webhook"),
   // Lower value = higher priority; the order channels are attempted in (#1025).
   priority: z.number().int().optional(),
+  // Max deliveries per clock hour before events are throttled (#1022).
+  // Omit or null for no limit.
+  maxPerHour: z.number().int().positive().nullable().optional(),
 });
 
 const webhookParamsSchema = z.object({
