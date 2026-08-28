@@ -309,3 +309,63 @@ export async function getApyTrend(
     next(err);
   }
 }
+
+// ── Rolling APY calculation (#978) ────────────────────────────────────────────
+export async function getRollingApy(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const contractId = String(req.params["contractId"]);
+    const result = await yieldService.getRollingApy(contractId);
+    if (!result) {
+      res.status(404).json({ error: "NotFound", message: "Vault not found" });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── APY history time-series (#979) ────────────────────────────────────────────
+export async function getApyHistory(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const contractId = String(req.params["contractId"]);
+    const fromParam = req.query.from as string | undefined;
+    const toParam = req.query.to as string | undefined;
+
+    let fromDate: Date | undefined;
+    let toDate: Date | undefined;
+
+    if (fromParam) {
+      fromDate = new Date(fromParam);
+      if (isNaN(fromDate.getTime())) {
+        res.status(400).json({ error: "BadRequest", message: "Invalid from date format" });
+        return;
+      }
+    }
+
+    if (toParam) {
+      toDate = new Date(toParam);
+      if (isNaN(toDate.getTime())) {
+        res.status(400).json({ error: "BadRequest", message: "Invalid to date format" });
+        return;
+      }
+    }
+
+    const result = await yieldService.getApyHistory(contractId, fromDate, toDate);
+    if (!result) {
+      res.status(404).json({ error: "NotFound", message: "Vault not found" });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
