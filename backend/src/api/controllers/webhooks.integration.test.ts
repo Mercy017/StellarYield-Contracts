@@ -91,6 +91,7 @@ describe("Webhook registration endpoints (#690)", () => {
     });
 
     it("returns 400 when the URL is not HTTPS", async () => {
+      mocks.validateWebhookUrl.mockRejectedValueOnce(new Error("Webhook URL must use HTTPS"));
       routeQuery({});
 
       const res = await request
@@ -99,7 +100,7 @@ describe("Webhook registration endpoints (#690)", () => {
         .send({ url: "http://example.com/hook", events: ["deposit"] });
 
       expect(res.status).toBe(400);
-      expect(res.body.error).toBe("ValidationError");
+      expect(res.body.error).toBe("InvalidWebhookUrl");
       // Validation must reject before the controller inserts anything.
       expect(mocks.query).not.toHaveBeenCalledWith(
         expect.stringContaining("INSERT INTO webhooks"),

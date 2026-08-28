@@ -741,6 +741,95 @@ export class Indexer {
       );
       return;
     }
+
+    const metadataUpdated = parseMetadataUpdatedEvent(event);
+    if (metadataUpdated) {
+      await this.handleMetadataUpdated(event.contractId ?? "", metadataUpdated);
+      await this.recordEvent(event, "rwa_details_updated", metadataUpdated as any);
+      try {
+        const metadataFields: { field: string; newValue: string }[] = [
+          { field: "name", newValue: metadataUpdated.name },
+          { field: "symbol", newValue: metadataUpdated.symbol },
+          { field: "document_uri", newValue: metadataUpdated.documentUri },
+          { field: "category", newValue: metadataUpdated.category },
+          { field: "expected_apy", newValue: String(metadataUpdated.expectedApy) },
+        ];
+        for (const { field, newValue } of metadataFields) {
+          await this.notificationService?.notify("vault.metadata_updated", {
+            contractId: event.contractId ?? "",
+            field,
+            newValue,
+            changedBy: null,
+          });
+        }
+      } catch (e) {
+        logger.warn({ err: e }, "NotificationService.notify failed for vault.metadata_updated");
+      }
+      return;
+    }
+  }
+
+  private async handleMetadataUpdated(
+    contractId: string,
+    meta: {
+      name: string;
+      symbol: string;
+      documentUri: string;
+      category: string;
+      expectedApy: number;
+    },
+  ): Promise<void> {
+    const vaultRows = await query<{ id: number }>(
+      "SELECT id FROM vaults WHERE contract_id = $1",
+      [contractId],
+    );
+    if (vaultRows.length === 0) {
+      logger.warn({ contractId }, "rwa_details_updated for unknown vault — skipping");
+      return;
+    }
+    const vaultId = vaultRows[0].id;
+
+    const prev = await query<{
+      rwa_name: string | null;
+      rwa_symbol: string | null;
+      rwa_document_uri: string | null;
+      rwa_category: string | null;
+      expected_apy: number | null;
+    }>(
+      "SELECT rwa_name, rwa_symbol, rwa_document_uri, rwa_category, expected_apy FROM vaults WHERE id = $1",
+      [vaultId],
+    );
+    const oldVals = prev[0] ?? {};
+
+    await query(
+      `UPDATE vaults
+       SET rwa_name = $1, rwa_symbol = $2, rwa_document_uri = $3,
+           rwa_category = $4, expected_apy = $5, updated_at = NOW()
+       WHERE id = $6`,
+      [meta.name, meta.symbol, meta.documentUri, meta.category, meta.expectedApy, vaultId],
+    );
+
+    const changes: { field: string; oldValue: string | null; newValue: string }[] = [
+      { field: "name", oldValue: oldVals.rwa_name ?? null, newValue: meta.name },
+      { field: "symbol", oldValue: oldVals.rwa_symbol ?? null, newValue: meta.symbol },
+      { field: "document_uri", oldValue: oldVals.rwa_document_uri ?? null, newValue: meta.documentUri },
+      { field: "category", oldValue: oldVals.rwa_category ?? null, newValue: meta.category },
+      {
+        field: "expected_apy",
+        oldValue: oldVals.expected_apy != null ? String(oldVals.expected_apy) : null,
+        newValue: String(meta.expectedApy),
+      },
+    ];
+    for (const c of changes) {
+      if (c.oldValue === c.newValue) continue;
+      await query(
+        `INSERT INTO vault_metadata_history (vault_id, field, old_value, new_value, changed_by, recorded_at)
+         VALUES ($1, $2, $3, $4, NULL, NOW())`,
+        [vaultId, c.field, c.oldValue, c.newValue],
+      );
+    }
+
+    logger.info({ contractId }, "Processed rwa_details_updated event");
   }
 
   isRunning(): boolean {
@@ -1604,6 +1693,58 @@ export function parseVaultStateChangedEvent(rawEvent: any): {
     const newState = String(native?.newState ?? (Array.isArray(native) ? native[1] : ""));
 
     return { oldState, newState };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse the `rwa_upd` (a.k.a. `rwa_details_updated`) event emitted by
+ * `set_rwa_details`, `set_rwa_document_uri`, and `set_expected_apy`.
+ *
+ * The event payload is a tuple of (name, symbol, document_uri, category,
+ * expected_apy). Returns null when the event is not a metadata update so it is
+ * skipped by the dispatcher (#974).
+ */
+export function parseMetadataUpdatedEvent(rawEvent: any): {
+  name: string;
+  symbol: string;
+  documentUri: string;
+  category: string;
+  expectedApy: number;
+} | null {
+  try {
+    const parsed = parseRawEventName(rawEvent);
+    if (!parsed) return null;
+
+    const { topics, data } = parsed;
+    let eventName = "";
+    try {
+      const firstTopic = typeof topics[0] === "string"
+        ? xdr.ScVal.fromXDR(topics[0], "base64")
+        : (topics[0] as any);
+      eventName = scValToNative(firstTopic as any);
+    } catch {
+      return null;
+    }
+
+    if (eventName !== "rwa_upd" && eventName !== "rwa_details_updated") return null;
+
+    const parsedValue = typeof data === "string"
+      ? xdr.ScVal.fromXDR(data, "base64")
+      : data;
+    const native = scValToNative(parsedValue as any) as any;
+    const name = String(native?.[0] ?? native?.name ?? "");
+    const symbol = String(native?.[1] ?? native?.symbol ?? "");
+    const documentUri = String(
+      native?.[2] ?? native?.documentUri ?? native?.document_uri ?? "",
+    );
+    const category = String(native?.[3] ?? native?.category ?? "");
+    const expectedApy = Number(
+      native?.[4] ?? native?.expectedApy ?? native?.expected_apy ?? 0,
+    );
+
+    return { name, symbol, documentUri, category, expectedApy };
   } catch {
     return null;
   }

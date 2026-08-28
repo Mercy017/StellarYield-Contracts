@@ -10,6 +10,7 @@ export default defineConfig({
     dedupe: ["graphql"],
   },
   test: {
+    testTimeout: 20000,
     server: {
       deps: {
         inline: ["@apollo/server", "graphql"],

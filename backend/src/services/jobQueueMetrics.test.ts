@@ -17,6 +17,7 @@ describe("Job Queue Metrics & Report Worker", () => {
     ]);
 
     jobQueueFailedTotal.inc({ job_name: "indexer-backfill" });
+    jobQueuePendingTotal.inc({ job_name: "indexer-backfill" });
     jobDurationSeconds.observe({ job_name: "indexer-backfill" }, 0.45);
 
     const metricsStr = await getMetrics();

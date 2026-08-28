@@ -10,6 +10,7 @@ import {
   getVaultLiveTotalAssets,
   getRedemptionQueue,
   getVaultSnapshot,
+  getVaultMetadataHistory,
   getVaultTopHolders,
   getVaultHolders,
   getVaultHolderCount,
@@ -178,6 +179,12 @@ const maturingSoonQuerySchema = z.object({
 // Detail endpoint query params: allow `fields` (comma-separated) and `embed` (comma-separated)
 const vaultDetailQuerySchema = z.object({ fields: z.string().optional(), embed: z.string().optional() });
 
+// Metadata history endpoint (#973): page + pageSize (capped at 100)
+const metadataHistoryQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).default(20).transform((value) => Math.min(value, 100)),
+});
+
 export const vaultsRouter = Router();
 
 vaultsRouter.get("/categories", listCategories);
@@ -253,6 +260,13 @@ vaultsRouter.get(
 );
 // Get vault snapshot: GET /api/v1/vaults/:contractId/snapshot
 vaultsRouter.get("/:contractId/snapshot", validateParams(vaultParamsSchema), getVaultSnapshot);
+// Metadata change history: GET /api/v1/vaults/:contractId/metadata-history (#973)
+vaultsRouter.get(
+  "/:contractId/metadata-history",
+  validateParams(vaultParamsSchema),
+  validateQuery(metadataHistoryQuerySchema),
+  getVaultMetadataHistory,
+);
 // Get vault TVL history: GET /api/v1/vaults/:contractId/tvl-history
 vaultsRouter.get("/:contractId/tvl-history", validateParams(vaultParamsSchema), getVaultTvlHistory);
 // Get compound projection: GET /api/v1/vaults/:contractId/compound-projection?shares=<amount>&epochs=<n>

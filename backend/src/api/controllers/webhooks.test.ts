@@ -46,6 +46,7 @@ describe("Webhook Controller", () => {
         url: "https://example.com/hook",
         events: ["deposit"],
         active: true,
+        channel: "webhook",
         consecutiveFailures: 0,
         priority: 0,
         fallbackChannel: null,
@@ -67,7 +68,7 @@ describe("Webhook Controller", () => {
 
       expect(query).toHaveBeenCalledWith(
         expect.stringContaining("INSERT INTO webhooks"),
-        ["https://example.com/hook", ["deposit"], null, 0],
+        ["https://example.com/hook", ["deposit"], null, "webhook", 0],
       );
     });
 

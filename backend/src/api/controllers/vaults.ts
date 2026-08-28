@@ -491,6 +491,73 @@ export async function getVaultSnapshot(req: Request, res: Response, next: NextFu
 }
 
 /**
+ * GET /api/v1/vaults/:contractId/metadata-history?page=&pageSize=
+ *
+ * Returns the chronological log of vault metadata changes sourced from
+ * vault_metadata_history, most recent first. Paginated with page + pageSize
+ * (max 100). Returns { data: [], total: 0, page, pageSize } for a vault with
+ * no metadata updates. (#973)
+ */
+export async function getVaultMetadataHistory(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = contractAddressSchema.safeParse(req.params["contractId"]);
+    if (!parsed.success) {
+      res.status(400).json({ error: "BadRequest", message: "Invalid contractId format" });
+      return;
+    }
+    const contractId = parsed.data;
+
+    const page = Math.max(1, parseInt(String(req.query["page"] ?? "1"), 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query["pageSize"] ?? "20"), 10) || 20));
+    const offset = (page - 1) * pageSize;
+
+    const vaultRow = await query<{ id: number }>(
+      "SELECT id FROM vaults WHERE contract_id = $1",
+      [contractId],
+    );
+    if (vaultRow.length === 0) {
+      res.status(404).json({ error: "NotFound", message: "Vault not found" });
+      return;
+    }
+    const vaultId = vaultRow[0].id;
+
+    const rows = await query<{
+      field: string;
+      old_value: string | null;
+      new_value: string | null;
+      changed_by: string | null;
+      recorded_at: Date;
+    }>(
+      `SELECT field, old_value, new_value, changed_by, recorded_at
+       FROM vault_metadata_history
+       WHERE vault_id = $1
+       ORDER BY recorded_at DESC
+       LIMIT $2 OFFSET $3`,
+      [vaultId, pageSize, offset],
+    );
+
+    const countRows = await query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM vault_metadata_history WHERE vault_id = $1",
+      [vaultId],
+    );
+    const total = parseInt(countRows[0]?.count ?? "0", 10);
+
+    const data = rows.map((r) => ({
+      field: r.field,
+      oldValue: r.old_value,
+      newValue: r.new_value,
+      changedBy: r.changed_by,
+      recordedAt: r.recorded_at.toISOString(),
+    }));
+
+    setCacheHeaders(res);
+    res.json({ data, total, page, pageSize });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * GET /api/v1/vaults/:contractId/holders/top?n=10
  *
  * Returns the top N shareholders (max 20) with rank, userAddress, shares, sharePercent.
