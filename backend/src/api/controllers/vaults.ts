@@ -646,6 +646,62 @@ export async function exportVaultHoldersCsv(req: Request, res: Response, next: N
 }
 
 /**
+ * POST /api/v1/vaults/metadata/validate
+ *
+ * Validates proposed vault metadata before on-chain submission.
+ * Accepts { name?: string; documentUri?: string; logoUri?: string; description?: string }
+ * Returns { valid: boolean; errors: { field: string; message: string }[] }
+ */
+export async function validateVaultMetadata(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { name, documentUri, logoUri, description } = req.body as {
+      name?: string;
+      documentUri?: string;
+      logoUri?: string;
+      description?: string;
+    };
+
+    const errors: { field: string; message: string }[] = [];
+
+    // Validate name: minimum 3 characters
+    if (name !== undefined && name !== null && name !== "") {
+      if (typeof name !== "string" || name.length < 3) {
+        errors.push({ field: "name", message: "name must be at least 3 characters" });
+      }
+    }
+
+    // Validate URIs: must be valid HTTPS URLs
+    const httpsUrlPattern = /^https:\/\/.+/i;
+    
+    if (documentUri !== undefined && documentUri !== null && documentUri !== "") {
+      if (typeof documentUri !== "string" || !httpsUrlPattern.test(documentUri)) {
+        errors.push({ field: "documentUri", message: "documentUri must be a valid HTTPS URL" });
+      }
+    }
+
+    if (logoUri !== undefined && logoUri !== null && logoUri !== "") {
+      if (typeof logoUri !== "string" || !httpsUrlPattern.test(logoUri)) {
+        errors.push({ field: "logoUri", message: "logoUri must be a valid HTTPS URL" });
+      }
+    }
+
+    // Validate description: maximum 1000 characters
+    if (description !== undefined && description !== null && description !== "") {
+      if (typeof description !== "string" || description.length > 1000) {
+        errors.push({ field: "description", message: "description must not exceed 1000 characters" });
+      }
+    }
+
+    res.json({
+      valid: errors.length === 0,
+      errors,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * GET /api/v1/vaults/:contractId/report?year=2025
  *
  * Returns a year-over-year summary of a vault's performance for tax and

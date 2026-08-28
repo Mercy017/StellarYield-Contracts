@@ -817,6 +817,160 @@ export class YieldService {
     return { targetApy, actualApy30d, delta, onTrack };
   }
 
+  // ── Rolling APY calculation (#978) ───────────────────────────────────────────
+  // Computes rolling 30-day and 7-day APY from epochs distributed within the time window.
+  async getRollingApy(contractId: string): Promise<{
+    apy30d: number | null;
+    apy7d: number | null;
+    basedOnEpochs: number;
+  } | null> {
+    const vaultRows = await query<{ total_assets: string | null }>(
+      `SELECT total_assets FROM vaults WHERE contract_id = $1 LIMIT 1`,
+      [contractId],
+    );
+
+    if (vaultRows.length === 0) return null;
+    const totalAssets = Number(vaultRows[0].total_assets ?? "0");
+
+    if (totalAssets <= 0) {
+      return { apy30d: null, apy7d: null, basedOnEpochs: 0 };
+    }
+
+    // Get epochs from the last 30 days
+    const windowStart30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const windowStart7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    const epochRows = await query<{ yield_amount: string; distributed_at: Date }>(
+      `SELECT e.yield_amount, e.distributed_at
+       FROM epochs e
+       JOIN vaults v ON e.vault_id = v.id
+       WHERE v.contract_id = $1 AND e.distributed_at >= $2
+       ORDER BY e.distributed_at ASC`,
+      [contractId, windowStart30d],
+    );
+
+    if (epochRows.length < 2) {
+      return { apy30d: null, apy7d: null, basedOnEpochs: epochRows.length };
+    }
+
+    // Calculate 30-day APY
+    const totalYield30d = epochRows.reduce(
+      (sum, r) => sum + BigInt(r.yield_amount),
+      0n,
+    );
+    const firstAt = epochRows[0].distributed_at.getTime();
+    const lastAt = epochRows[epochRows.length - 1].distributed_at.getTime();
+    const elapsedDays30d = Math.min(
+      30,
+      Math.max(1, (lastAt - firstAt) / (24 * 60 * 60 * 1000)),
+    );
+    const apy30d = (Number(totalYield30d) / totalAssets) * (365 / elapsedDays30d);
+
+    // Calculate 7-day APY from epochs in the 7-day window
+    const epochRows7d = epochRows.filter(r => r.distributed_at >= windowStart7d);
+    let apy7d: number | null = null;
+    if (epochRows7d.length >= 2) {
+      const totalYield7d = epochRows7d.reduce(
+        (sum, r) => sum + BigInt(r.yield_amount),
+        0n,
+      );
+      const firstAt7d = epochRows7d[0].distributed_at.getTime();
+      const lastAt7d = epochRows7d[epochRows7d.length - 1].distributed_at.getTime();
+      const elapsedDays7d = Math.min(
+        7,
+        Math.max(1, (lastAt7d - firstAt7d) / (24 * 60 * 60 * 1000)),
+      );
+      apy7d = (Number(totalYield7d) / totalAssets) * (365 / elapsedDays7d);
+    }
+
+    return { apy30d, apy7d, basedOnEpochs: epochRows.length };
+  }
+
+  // ── APY history time-series (#979) ───────────────────────────────────────────
+  // Returns a trailing 30-day APY computed as of each epoch distribution date.
+  async getApyHistory(contractId: string, fromDate?: Date, toDate?: Date): Promise<{
+    points: { date: string; apy: number }[];
+  } | null> {
+    const vaultRows = await query<{ total_assets: string | null }>(
+      `SELECT total_assets FROM vaults WHERE contract_id = $1 LIMIT 1`,
+      [contractId],
+    );
+
+    if (vaultRows.length === 0) return null;
+    const totalAssets = Number(vaultRows[0].total_assets ?? "0");
+
+    if (totalAssets <= 0) {
+      return { points: [] };
+    }
+
+    // Build date filter conditions
+    const conditions: string[] = ["v.contract_id = $1"];
+    const params: unknown[] = [contractId];
+    let paramIndex = 2;
+
+    if (fromDate) {
+      params.push(fromDate);
+      conditions.push(`e.distributed_at >= $${paramIndex}::timestamptz`);
+      paramIndex++;
+    }
+
+    if (toDate) {
+      params.push(toDate);
+      conditions.push(`e.distributed_at <= $${paramIndex}::timestamptz`);
+      paramIndex++;
+    }
+
+    const whereClause = conditions.join(" AND ");
+
+    // Get all epochs with their distribution dates
+    const epochRows = await query<{ yield_amount: string; distributed_at: Date }>(
+      `SELECT e.yield_amount, e.distributed_at
+       FROM epochs e
+       JOIN vaults v ON e.vault_id = v.id
+       WHERE ${whereClause}
+       ORDER BY e.distributed_at ASC`,
+      params,
+    );
+
+    if (epochRows.length < 2) {
+      return { points: [] };
+    }
+
+    // For each epoch, compute the trailing 30-day APY as of that date
+    const points: { date: string; apy: number }[] = [];
+
+    for (let i = 0; i < epochRows.length; i++) {
+      const currentEpoch = epochRows[i];
+      const windowStart = new Date(currentEpoch.distributed_at.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+      // Get epochs in the 30-day window ending at this epoch's distribution date
+      const windowEpochs = epochRows.filter(e => 
+        e.distributed_at >= windowStart && e.distributed_at <= currentEpoch.distributed_at
+      );
+
+      if (windowEpochs.length < 2) continue;
+
+      const totalYield = windowEpochs.reduce(
+        (sum, r) => sum + BigInt(r.yield_amount),
+        0n,
+      );
+      const firstAt = windowEpochs[0].distributed_at.getTime();
+      const lastAt = windowEpochs[windowEpochs.length - 1].distributed_at.getTime();
+      const elapsedDays = Math.min(
+        30,
+        Math.max(1, (lastAt - firstAt) / (24 * 60 * 60 * 1000)),
+      );
+      const apy = (Number(totalYield) / totalAssets) * (365 / elapsedDays);
+
+      points.push({
+        date: currentEpoch.distributed_at.toISOString(),
+        apy,
+      });
+    }
+
+    return { points };
+  }
+
   // ── APY trend indicator (#986) ───────────────────────────────────────────────
   // Compares the average per-epoch yield_per_share of the most recent 3 epochs
   // to the preceding 3 epochs.
