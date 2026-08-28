@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({ query: vi.fn() }));
 vi.mock("../../db/index.js", () => ({ query: mocks.query }));
 vi.mock("../../cache/redis.js", () => ({ cacheGet: vi.fn(), cacheSet: vi.fn() }));
 
-import { getTvlAggregate } from "./analytics.js";
+import { getTvlAggregate, getApyRanking } from "./analytics.js";
 
 describe("GET /api/v1/analytics/tvl (#775)", () => {
   const mockNext = vi.fn();
@@ -79,3 +79,57 @@ describe("GET /api/v1/analytics/tvl (#775)", () => {
     expect(mockNext).toHaveBeenCalledWith(err);
   });
 });
+
+describe("GET /api/v1/analytics/apy/ranking (#981)", () => {
+  const mockNext = vi.fn();
+  const buildRes = () => {
+    const res: any = {};
+    res.set = vi.fn().mockReturnThis();
+    res.json = vi.fn().mockReturnThis();
+    return res;
+  };
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it("returns vaults ranked by apy30d DESC", async () => {
+    mocks.query
+      .mockResolvedValueOnce([
+        { id: 1, contract_id: "C1", name: "Vault 1", state: "Active", total_assets: "1000" },
+        { id: 2, contract_id: "C2", name: "Vault 2", state: "Active", total_assets: "1000" },
+      ])
+      .mockResolvedValueOnce([
+        { vault_id: 1, yield_amount: "50", distributed_at: new Date("2026-08-01") },
+        { vault_id: 1, yield_amount: "50", distributed_at: new Date("2026-08-20") },
+        { vault_id: 2, yield_amount: "200", distributed_at: new Date("2026-08-01") },
+        { vault_id: 2, yield_amount: "200", distributed_at: new Date("2026-08-20") },
+      ]);
+
+    const req = { query: {} } as any;
+    const res = buildRes();
+
+    await getApyRanking(req, res, mockNext);
+
+    expect(res.json).toHaveBeenCalledOnce();
+    const result = res.json.mock.calls[0][0];
+    expect(result).toHaveLength(2);
+    expect(result[0].contractId).toBe("C2");
+    expect(result[0].apy30d).toBeGreaterThan(result[1].apy30d);
+    expect(result[0]).toHaveProperty("contractId");
+    expect(result[0]).toHaveProperty("name");
+    expect(result[0]).toHaveProperty("apy30d");
+    expect(result[0]).toHaveProperty("apy7d");
+    expect(result[0]).toHaveProperty("totalAssets");
+  });
+
+  it("returns empty array when no vaults have epoch history", async () => {
+    mocks.query.mockResolvedValueOnce([]); // JOIN epochs returns empty
+
+    const req = { query: {} } as any;
+    const res = buildRes();
+
+    await getApyRanking(req, res, mockNext);
+
+    expect(res.json).toHaveBeenCalledWith([]);
+  });
+});
+

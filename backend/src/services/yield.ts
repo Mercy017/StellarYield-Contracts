@@ -1098,4 +1098,126 @@ export class YieldService {
     if (denom === 0) return null;
     return cov / denom;
   }
+
+  // ── Vault APY ranking (#981) ──────────────────────────────────────────────
+  // Returns vaults ordered by rolling 30-day APY (apy30d DESC), including contractId,
+  // name, apy30d, apy7d, and totalAssets. Excludes vaults with no epoch history.
+  // Limited to 20 vaults and supports optional state filter.
+  async getApyRanking(state?: string): Promise<{
+    contractId: string;
+    name: string;
+    apy30d: number;
+    apy7d: number | null;
+    totalAssets: string;
+  }[]> {
+    const params: unknown[] = [];
+    let whereClause = "WHERE v.archived = FALSE";
+
+    if (state) {
+      params.push(state);
+      whereClause += ` AND v.state = $1`;
+    }
+
+    // Exclude vaults with no epoch history by using INNER JOIN on epochs table
+    const vaultRows = await query<{
+      id: number;
+      contract_id: string;
+      name: string | null;
+      state: string;
+      total_assets: string | null;
+    }>(
+      `SELECT v.id, v.contract_id, v.name, v.state, v.total_assets
+       FROM vaults v
+       JOIN epochs e ON e.vault_id = v.id
+       ${whereClause}
+       GROUP BY v.id, v.contract_id, v.name, v.state, v.total_assets`,
+      params,
+    );
+
+    if (vaultRows.length === 0) return [];
+
+    const windowStart30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const windowStart7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+    const vaultIds = vaultRows.map((v) => v.id);
+    const epochRows = await query<{
+      vault_id: number;
+      yield_amount: string;
+      distributed_at: Date;
+    }>(
+      `SELECT vault_id, yield_amount, distributed_at
+       FROM epochs
+       WHERE vault_id = ANY($1::int[]) AND distributed_at >= $2
+       ORDER BY vault_id, distributed_at ASC`,
+      [vaultIds, windowStart30d],
+    );
+
+    const epochsByVault = new Map<number, { yield_amount: string; distributed_at: Date }[]>();
+    for (const row of epochRows) {
+      let list = epochsByVault.get(row.vault_id);
+      if (!list) {
+        list = [];
+        epochsByVault.set(row.vault_id, list);
+      }
+      list.push(row);
+    }
+
+    const rankedVaults = vaultRows.map((v) => {
+      const totalAssetsNum = Number(v.total_assets ?? "0");
+      let apy30d = 0;
+      let apy7d: number | null = null;
+
+      if (totalAssetsNum > 0) {
+        const vaultEpochs30d = epochsByVault.get(v.id) ?? [];
+        if (vaultEpochs30d.length >= 1) {
+          const totalYield30d = vaultEpochs30d.reduce(
+            (sum, r) => sum + BigInt(r.yield_amount),
+            0n,
+          );
+          let elapsedDays30d = 1;
+          if (vaultEpochs30d.length >= 2) {
+            const firstAt = vaultEpochs30d[0].distributed_at.getTime();
+            const lastAt = vaultEpochs30d[vaultEpochs30d.length - 1].distributed_at.getTime();
+            elapsedDays30d = Math.min(
+              30,
+              Math.max(1, (lastAt - firstAt) / (24 * 60 * 60 * 1000)),
+            );
+          }
+          apy30d = (Number(totalYield30d) / totalAssetsNum) * (365 / elapsedDays30d);
+        }
+
+        const vaultEpochs7d = (epochsByVault.get(v.id) ?? []).filter(
+          (r) => r.distributed_at >= windowStart7d,
+        );
+        if (vaultEpochs7d.length >= 1) {
+          const totalYield7d = vaultEpochs7d.reduce(
+            (sum, r) => sum + BigInt(r.yield_amount),
+            0n,
+          );
+          let elapsedDays7d = 1;
+          if (vaultEpochs7d.length >= 2) {
+            const firstAt = vaultEpochs7d[0].distributed_at.getTime();
+            const lastAt = vaultEpochs7d[vaultEpochs7d.length - 1].distributed_at.getTime();
+            elapsedDays7d = Math.min(
+              7,
+              Math.max(1, (lastAt - firstAt) / (24 * 60 * 60 * 1000)),
+            );
+          }
+          apy7d = (Number(totalYield7d) / totalAssetsNum) * (365 / elapsedDays7d);
+        }
+      }
+
+      return {
+        contractId: v.contract_id,
+        name: v.name ?? "",
+        apy30d,
+        apy7d,
+        totalAssets: v.total_assets ?? "0",
+      };
+    });
+
+    rankedVaults.sort((a, b) => b.apy30d - a.apy30d);
+    return rankedVaults.slice(0, 20);
+  }
 }
+

@@ -1,6 +1,11 @@
 import { Router } from "express";
 import { z } from "zod";
-import { getAnalyticsSummary, getTvlAggregate, getYieldCorrelation } from "../controllers/analytics.js";
+import {
+  getAnalyticsSummary,
+  getTvlAggregate,
+  getYieldCorrelation,
+  getApyRanking,
+} from "../controllers/analytics.js";
 import { validateQuery } from "../middleware/validate.js";
 
 const contractIdSchema = z
@@ -13,6 +18,10 @@ const yieldCorrelationQuerySchema = z.object({
   vaultB: contractIdSchema,
 });
 
+const rankingQuerySchema = z.object({
+  state: z.string().optional(),
+});
+
 export const analyticsRouter = Router();
 
 analyticsRouter.get("/summary", getAnalyticsSummary);
@@ -22,3 +31,11 @@ analyticsRouter.get(
   validateQuery(yieldCorrelationQuerySchema),
   getYieldCorrelation,
 );
+
+// ── Vault APY ranking (#981) ────────────────────────────────────────────────
+analyticsRouter.get(
+  "/apy/ranking",
+  validateQuery(rankingQuerySchema),
+  getApyRanking,
+);
+

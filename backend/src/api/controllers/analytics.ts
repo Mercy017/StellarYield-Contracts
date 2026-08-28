@@ -112,3 +112,19 @@ export async function getYieldCorrelation(
     next(err);
   }
 }
+
+// ── Vault APY ranking (#981) ──────────────────────────────────────────────────
+export async function getApyRanking(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const state = req.query.state ? String(req.query.state) : undefined;
+    const ranking = await yieldService.getApyRanking(state);
+    res.json(ranking);
+  } catch (err) {
+    next(err);
+  }
+}
+
