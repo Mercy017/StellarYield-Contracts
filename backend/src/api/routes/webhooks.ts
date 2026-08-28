@@ -30,15 +30,15 @@ const KNOWN_EVENTS = [
   "vault.funded",
 ] as const;
 
+const KNOWN_CHANNELS = ["webhook", "email", "slack"] as const;
+
 const createWebhookSchema = z.object({
-  url: z
-    .string()
-    .url()
-    .refine((v) => v.startsWith("https://"), { message: "Webhook URL must use HTTPS" }),
+  url: z.string().min(1, "URL or email is required"),
   events: z
     .array(z.enum(KNOWN_EVENTS))
     .min(1, "At least one event must be specified"),
   secret: z.string().optional(),
+  channel: z.enum(KNOWN_CHANNELS).default("webhook"),
   // Lower value = higher priority; the order channels are attempted in (#1025).
   priority: z.number().int().optional(),
 });

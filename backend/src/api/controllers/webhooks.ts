@@ -11,6 +11,7 @@ interface WebhookRow {
   active: boolean;
   created_at: Date;
   consecutive_failures: number;
+  channel: string | null;
   priority: number;
   fallback_channel: number | null;
 }
@@ -23,6 +24,7 @@ function formatWebhook(w: WebhookRow) {
     active: w.active,
     createdAt: w.created_at,
     consecutiveFailures: w.consecutive_failures ?? 0,
+    channel: w.channel ?? "webhook",
     priority: w.priority ?? 0,
     fallbackChannel: w.fallback_channel ?? null,
   };
@@ -30,25 +32,36 @@ function formatWebhook(w: WebhookRow) {
 
 export async function createWebhook(req: Request, res: Response, next: NextFunction) {
   try {
-    const { url, events, secret, priority } = req.body as {
+    const { url, events, secret, channel, priority } = req.body as {
       url: string;
       events: string[];
       secret?: string;
+      channel?: string;
       priority?: number;
     };
 
-    try {
-      await validateWebhookUrl(url);
-    } catch (err: any) {
-      res.status(400).json({ error: "InvalidWebhookUrl", message: err.message });
-      return;
+    const webhookChannel = channel ?? "webhook";
+
+    if (webhookChannel === "webhook" || webhookChannel === "slack") {
+      try {
+        await validateWebhookUrl(url);
+      } catch (err: any) {
+        res.status(400).json({ error: "InvalidWebhookUrl", message: err.message });
+        return;
+      }
+    } else if (webhookChannel === "email") {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(url)) {
+        res.status(400).json({ error: "InvalidEmail", message: "Must be a valid email address" });
+        return;
+      }
     }
 
     const rows = await query<WebhookRow>(
-      `INSERT INTO webhooks (url, events, secret, priority)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, url, events, active, created_at, consecutive_failures, priority, fallback_channel`,
-      [url, events, secret ?? null, priority ?? 0],
+      `INSERT INTO webhooks (url, events, secret, channel, priority)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, url, events, active, created_at, consecutive_failures, channel, priority, fallback_channel`,
+      [url, events, secret ?? null, webhookChannel, priority ?? 0],
     );
 
     res.status(201).json(formatWebhook(rows[0]));
@@ -60,7 +73,7 @@ export async function createWebhook(req: Request, res: Response, next: NextFunct
 export async function listWebhooks(_req: Request, res: Response, next: NextFunction) {
   try {
     const rows = await query<WebhookRow>(
-      `SELECT id, url, events, active, created_at, consecutive_failures, priority, fallback_channel
+      `SELECT id, url, events, active, created_at, consecutive_failures, channel, priority, fallback_channel
        FROM webhooks
        WHERE active = TRUE
        ORDER BY priority ASC, created_at DESC`,
@@ -106,7 +119,7 @@ export async function testWebhook(req: Request, res: Response, next: NextFunctio
     }
 
     const rows = await query<WebhookRow>(
-      "SELECT id, url, events, active, created_at, consecutive_failures, secret FROM webhooks WHERE id = $1",
+      "SELECT id, url, events, active, created_at, consecutive_failures, secret, channel FROM webhooks WHERE id = $1",
       [id],
     );
 
