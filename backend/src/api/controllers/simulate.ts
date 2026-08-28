@@ -4,10 +4,13 @@ import { z } from "zod";
 import {
   readTotalAssets,
   readFundingTarget,
+  readShareBalance,
+  readTotalSupply,
 } from "../../services/stellar.js";
 import { query } from "../../db/index.js";
 import { cacheGet, cacheSet } from "../../cache/redis.js";
 import { translateErrorCode } from "../../stellar/error-codes.js";
+import { logger } from "../../logger.js";
 
 const contractAddressSchema = z.string().length(56).regex(/^C[A-Z2-7]{55}$/);
 
@@ -22,6 +25,33 @@ const SIMULATION_CACHE_TTL_SECONDS = 5;
 function simulationCacheKey(contractId: string, operation: string, params: unknown): string {
   const paramsHash = createHash("sha256").update(JSON.stringify(params)).digest("hex").slice(0, 16);
   return `sim:${contractId}:${operation}:${paramsHash}`;
+}
+
+// ── Issue #1017: Simulation audit logging ─────────────────────────────────────
+
+interface SimulationAuditLog {
+  contractId: string;
+  operation: string;
+  params: Record<string, unknown>;
+  result: unknown;
+  durationMs: number;
+  fromCache: boolean;
+}
+
+async function logSimulation(result: SimulationAuditLog): Promise<void> {
+  const logData: Record<string, unknown> = {
+    contractId: result.contractId,
+    operation: result.operation,
+    params: result.params,
+    durationMs: result.durationMs,
+    fromCache: result.fromCache,
+  };
+
+  if (logger.level === "debug") {
+    logData.result = result.result;
+  }
+
+  logger.debug(logData, "Simulation request");
 }
 
 // ── Issue #1015: Simulation error translation ────────────────────────────────
@@ -75,6 +105,7 @@ export async function simulateFundingProgress(
   res: Response,
   next: NextFunction,
 ) {
+  const startTime = Date.now();
   try {
     const parsed = contractAddressSchema.safeParse(req.params["contractId"]);
     if (!parsed.success) {
@@ -92,7 +123,17 @@ export async function simulateFundingProgress(
       progressPercent: number;
       additionalDepositsNeeded: number;
     }>(cacheKey);
+    
+    const fromCache = !!cached;
     if (cached) {
+      await logSimulation({
+        contractId,
+        operation: "funding_progress",
+        params: {},
+        result: cached,
+        durationMs: Date.now() - startTime,
+        fromCache,
+      });
       res.json(cached);
       return;
     }
@@ -161,6 +202,15 @@ export async function simulateFundingProgress(
     // Issue #1014: Cache result for 5 seconds
     await cacheSet(cacheKey, result, SIMULATION_CACHE_TTL_SECONDS);
 
+    await logSimulation({
+      contractId,
+      operation: "funding_progress",
+      params: {},
+      result,
+      durationMs: Date.now() - startTime,
+      fromCache: false,
+    });
+
     res.json(result);
   } catch (err) {
     next(err);
@@ -197,6 +247,7 @@ export async function simulateMultiOperation(
   res: Response,
   next: NextFunction,
 ) {
+  const startTime = Date.now();
   try {
     const parsed = contractAddressSchema.safeParse(req.params["contractId"]);
     if (!parsed.success) {
@@ -219,7 +270,17 @@ export async function simulateMultiOperation(
     // Issue #1014: Check cache first
     const cacheKey = simulationCacheKey(contractId, "multi", operations);
     const cached = await cacheGet<SimulationResult[]>(cacheKey);
+    
+    const fromCache = !!cached;
     if (cached) {
+      await logSimulation({
+        contractId,
+        operation: "multi_operation",
+        params: { operations },
+        result: cached,
+        durationMs: Date.now() - startTime,
+        fromCache,
+      });
       res.json(cached);
       return;
     }
@@ -390,6 +451,15 @@ export async function simulateMultiOperation(
 
     // Issue #1014: Cache result for 5 seconds
     await cacheSet(cacheKey, results, SIMULATION_CACHE_TTL_SECONDS);
+
+    await logSimulation({
+      contractId,
+      operation: "multi_operation",
+      params: { operations },
+      result: results,
+      durationMs: Date.now() - startTime,
+      fromCache: false,
+    });
 
     res.json(results);
   } catch (err) {

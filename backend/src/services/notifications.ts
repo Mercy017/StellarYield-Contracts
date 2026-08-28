@@ -4,6 +4,7 @@ import { query } from "../db/index.js";
 import { logger } from "../logger.js";
 import { sseService } from "./sse.js";
 import { jobQueue } from "./jobQueue.js";
+import { sendEmail } from "./email.js";
 
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
@@ -58,6 +59,7 @@ interface WebhookRow {
   events: string[];
   secret: string | null;
   consecutive_failures: number;
+  channel: string | null;
   priority: number;
   fallback_channel: number | null;
 }
@@ -75,7 +77,7 @@ export class NotificationService {
    */
   async notify(event: string, data: Record<string, unknown>): Promise<void> {
     const webhooks = await query<WebhookRow>(
-      `SELECT id, url, events, secret, consecutive_failures, priority, fallback_channel
+      `SELECT id, url, events, secret, consecutive_failures, channel, priority, fallback_channel
        FROM webhooks
        WHERE active = TRUE AND $1 = ANY(events)
        ORDER BY priority ASC, created_at DESC`,
@@ -83,8 +85,6 @@ export class NotificationService {
     );
 
     if (webhooks.length === 0) return;
-
-    const payload = JSON.stringify({ event, data, timestamp: new Date().toISOString() });
 
     // Attempt channels in ascending priority order (lower value = higher
     // priority). Channels that share a priority are dispatched concurrently;
@@ -98,10 +98,72 @@ export class NotificationService {
 
     for (const priority of [...tiers.keys()].sort((a, b) => a - b)) {
       await Promise.allSettled(
-        tiers.get(priority)!.map((webhook) =>
-          jobQueue.send("webhook-deliver", { webhookId: webhook.id, payload }),
-        ),
+        tiers.get(priority)!.map((webhook) => {
+          if (webhook.channel === "email") {
+            return this.sendEmailNotification(event, data, webhook.url);
+          } else {
+            const payload = webhook.channel === "slack"
+              ? this.formatSlackPayload(event, data)
+              : JSON.stringify({ event, data, timestamp: new Date().toISOString() });
+            return jobQueue.send("webhook-deliver", { webhookId: webhook.id, payload });
+          }
+        }),
       );
+    }
+  }
+
+  private formatSlackPayload(event: string, data: Record<string, unknown>): string {
+    const vaultName = (data.vaultName as string) || (data.name as string) || "Unknown Vault";
+    const keyData = Object.entries(data)
+      .filter(([key]) => key !== "vaultName" && key !== "name")
+      .map(([key, value]) => `*${key}*: ${value}`)
+      .join("\n");
+
+    const slackPayload = {
+      blocks: [
+        {
+          type: "header",
+          text: {
+            type: "plain_text",
+            text: `StellarYield Event: ${event}`,
+          },
+        },
+        {
+          type: "section",
+          text: {
+            type: "mrkdwn",
+            text: `*Vault*: ${vaultName}\n*Event Type*: ${event}\n\n${keyData}`,
+          },
+        },
+      ],
+    };
+
+    return JSON.stringify(slackPayload);
+  }
+
+  private async sendEmailNotification(event: string, data: Record<string, unknown>, email: string): Promise<void> {
+    const vaultName = (data.vaultName as string) || (data.name as string) || "Unknown Vault";
+    const keyData = Object.entries(data)
+      .filter(([key]) => key !== "vaultName" && key !== "name")
+      .map(([key, value]) => `<strong>${key}:</strong> ${value}`)
+      .join("<br>");
+
+    const html = `
+      <h2>StellarYield Event: ${event}</h2>
+      <p><strong>Vault:</strong> ${vaultName}</p>
+      <p><strong>Event Type:</strong> ${event}</p>
+      <hr>
+      <p>${keyData}</p>
+    `;
+
+    try {
+      await sendEmail({
+        to: email,
+        subject: `StellarYield Event: ${event}`,
+        html,
+      });
+    } catch (err) {
+      logger.error({ email, event, err }, "Failed to send email notification");
     }
   }
 
@@ -110,7 +172,7 @@ export class NotificationService {
    */
   async getWebhooks(): Promise<WebhookRow[]> {
     return query<WebhookRow>(
-      `SELECT id, url, events, secret, consecutive_failures, priority, fallback_channel
+      `SELECT id, url, events, secret, consecutive_failures, channel, priority, fallback_channel
        FROM webhooks
        WHERE active = TRUE
        ORDER BY priority ASC, created_at DESC`,
@@ -125,12 +187,13 @@ export class NotificationService {
     events: string[],
     secret?: string,
     priority = 0,
+    channel?: string,
   ): Promise<WebhookRow> {
     const rows = await query<WebhookRow>(
-      `INSERT INTO webhooks (url, events, secret, priority)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, url, events, secret, consecutive_failures, priority, fallback_channel`,
-      [url, events, secret ?? null, priority],
+      `INSERT INTO webhooks (url, events, secret, priority, channel)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, url, events, secret, consecutive_failures, priority, fallback_channel, channel`,
+      [url, events, secret ?? null, priority, channel ?? "webhook"],
     );
     return rows[0];
   }
@@ -172,7 +235,7 @@ export class NotificationService {
     for (const row of dueRows) {
       try {
         const webhookRows = await query<WebhookRow>(
-          `SELECT id, url, events, secret, consecutive_failures, priority, fallback_channel
+          `SELECT id, url, events, secret, consecutive_failures, priority, fallback_channel, channel
            FROM webhooks WHERE id = $1`,
           [row.webhook_id],
         );
