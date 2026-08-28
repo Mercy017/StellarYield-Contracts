@@ -1312,7 +1312,7 @@ export class VaultService {
         conditions.push(`similarity(v.name, $${params.length + 1}) > 0.3`);
         params.push(q);
       } else {
-        conditions.push(`(v.name ILIKE $${params.length + 1} OR v.symbol ILIKE $${params.length + 1} OR v.rwa_name ILIKE $${params.length + 1})`);
+        conditions.push(`(v.name ILIKE $${params.length + 1} OR v.symbol ILIKE $${params.length + 1} OR v.rwa_name ILIKE $${params.length + 1} OR v.description ILIKE $${params.length + 1})`);
         params.push(`%${q}%`);
       }
     }
