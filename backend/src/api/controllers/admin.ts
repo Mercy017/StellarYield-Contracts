@@ -838,9 +838,11 @@ export async function getVaultComplianceStatus(req: Request, res: Response, next
       zkme_verifier_address: string | null;
       emergency: boolean;
       paused: boolean;
+      document_accessible: boolean | null;
+      document_last_checked: Date | null;
     }>(
       `SELECT id, zkme_verifier_address, COALESCE(emergency, FALSE) AS emergency,
-              COALESCE(paused, FALSE) AS paused
+              COALESCE(paused, FALSE) AS paused, document_accessible, document_last_checked
        FROM vaults
        WHERE contract_id = $1`,
       [contractId],
@@ -883,6 +885,8 @@ export async function getVaultComplianceStatus(req: Request, res: Response, next
       emergency: vault.emergency,
       paused: vault.paused,
       lastPauseAt,
+      documentAccessible: vault.document_accessible,
+      documentLastChecked: vault.document_last_checked?.toISOString() ?? null,
     });
   } catch (err) {
     next(err);

@@ -36,6 +36,7 @@ import {
   getCooperatorFees,
   streamVaultEvents,
   getVaultsBulkStatus,
+  validateVaultMetadata,
 } from "../controllers/vaults.js";
 import {
   translateSimulationError,
@@ -212,6 +213,14 @@ vaultsRouter.post(
   validateBody(z.object({ errorCode: z.number().int() })),
   translateSimulationError,
 );
+// Issue #976: Vault metadata validation
+const metadataValidationSchema = z.object({
+  name: z.string().optional(),
+  documentUri: z.string().optional(),
+  logoUri: z.string().optional(),
+  description: z.string().optional(),
+});
+vaultsRouter.post("/metadata/validate", validateBody(metadataValidationSchema), validateVaultMetadata);
 vaultsRouter.get("/factory/:factoryId", validateParams(vaultFactoryParamsSchema), listVaultsByFactory);
 // Issue #1012: Funding progress simulation
 vaultsRouter.get(
