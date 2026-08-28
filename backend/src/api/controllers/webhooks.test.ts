@@ -71,6 +71,8 @@ describe("Webhook Controller", () => {
         events: ["deposit"],
         active: true,
         consecutiveFailures: 0,
+        priority: 0,
+        fallbackChannel: null,
         createdAt: row.created_at,
       });
     });
@@ -89,7 +91,7 @@ describe("Webhook Controller", () => {
 
       expect(query).toHaveBeenCalledWith(
         expect.stringContaining("INSERT INTO webhooks"),
-        ["https://example.com/hook", ["deposit"], null],
+        ["https://example.com/hook", ["deposit"], null, 0],
       );
     });
 
