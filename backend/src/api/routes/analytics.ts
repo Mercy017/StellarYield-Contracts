@@ -4,6 +4,9 @@ import {
   getAnalyticsSummary,
   getTvlAggregate,
   getYieldCorrelation,
+  getTopPerformingVaults,
+  getUnderperformingVaults,
+  getApyBenchmark,
   getApyRanking,
 } from "../controllers/analytics.js";
 import { validateQuery } from "../middleware/validate.js";
@@ -16,6 +19,11 @@ const contractIdSchema = z
 const yieldCorrelationQuerySchema = z.object({
   vaultA: contractIdSchema,
   vaultB: contractIdSchema,
+});
+
+const topUnderperformingQuerySchema = z.object({
+  n: z.coerce.number().int().positive().optional().default(5),
+  state: z.string().optional(),
 });
 
 const rankingQuerySchema = z.object({
@@ -31,6 +39,22 @@ analyticsRouter.get(
   validateQuery(yieldCorrelationQuerySchema),
   getYieldCorrelation,
 );
+
+// ── Best & worst performing vault endpoints (#983) ─────────────────────────
+analyticsRouter.get(
+  "/vaults/top-performing",
+  validateQuery(topUnderperformingQuerySchema),
+  getTopPerformingVaults,
+);
+
+analyticsRouter.get(
+  "/vaults/underperforming",
+  validateQuery(topUnderperformingQuerySchema),
+  getUnderperformingVaults,
+);
+
+// ── Platform average APY benchmark (#980) ───────────────────────────────────
+analyticsRouter.get("/apy/benchmark", getApyBenchmark);
 
 // ── Vault APY ranking (#981) ────────────────────────────────────────────────
 analyticsRouter.get(

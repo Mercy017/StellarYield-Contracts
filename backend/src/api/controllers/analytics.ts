@@ -113,6 +113,67 @@ export async function getYieldCorrelation(
   }
 }
 
+// ── Top performing vaults (#983) ──────────────────────────────────────────────
+export async function getTopPerformingVaults(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const n = Math.max(1, parseInt(String(req.query.n ?? "5"), 10) || 5);
+    const state = req.query.state ? String(req.query.state) : undefined;
+    const vaults = await yieldService.getTopPerformingVaults(n, state);
+    res.json(vaults);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── Underperforming vaults (#983) ─────────────────────────────────────────────
+export async function getUnderperformingVaults(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const n = Math.max(1, parseInt(String(req.query.n ?? "5"), 10) || 5);
+    const state = req.query.state ? String(req.query.state) : undefined;
+    const vaults = await yieldService.getUnderperformingVaults(n, state);
+    res.json(vaults);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── Platform average APY benchmark (#980) ──────────────────────────────────────
+const BENCHMARK_CACHE_TTL = 300; // 5 minutes
+
+export async function getApyBenchmark(
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const cacheKey = "analytics:apy:benchmark";
+    const cached = await cacheGet<{
+      platformAverageApy30d: number | null;
+      platformAverageApy7d: number | null;
+      vaultCount: number;
+    }>(cacheKey);
+
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
+    const benchmark = await yieldService.getPlatformApyBenchmark();
+    await cacheSet(cacheKey, benchmark, BENCHMARK_CACHE_TTL);
+    res.json(benchmark);
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ── Vault APY ranking (#981) ──────────────────────────────────────────────────
 export async function getApyRanking(
   req: Request,
