@@ -591,35 +591,6 @@ export class VaultService {
       paramIdx = nextIdx - 1;
     }
 
-    // Use prepared statement for unfiltered queries (most common hot path)
-    let vaults: VaultRow[];
-    if (!state && sortColumn === "created_at" && sortDirection === "DESC") {
-      vaults = await queryPrepared<VaultRow>("list_vaults", [pageSize, offset], queryOpts);
-    } else {
-      vaults = await query<VaultRow>(
-        `SELECT v.id, v.contract_id, v.factory_id, v.asset, v.name, v.symbol, v.state,
-                v.total_assets, v.total_supply, v.created_at, v.updated_at,
-                COALESCE((
-                  SELECT COUNT(*)::int
-                  FROM user_vault_positions uvp
-                  WHERE uvp.vault_id = v.id AND uvp.shares > 0
-                ), 0) AS depositor_count
-         FROM vaults v
-         ${whereClause}
-         ORDER BY v.${sortColumn} ${sortDirection}
-         LIMIT $1 OFFSET $2`,
-        params,
-        queryOpts,
-      );
-    }
-
-    // Get total count
-    const countResult = await query<{ count: string }>(
-      `SELECT COUNT(*) as count
-       FROM vaults v
-       ${state ? "WHERE v.state = $1" : ""}`,
-      state ? [state] : [],
-      queryOpts,
     if (cursorId !== null && cursorCreatedAt !== null) {
       paramIdx++;
       const cursorTs = cursorCreatedAt.toISOString();
@@ -767,11 +738,6 @@ export class VaultService {
     return rows.map(mapVaultRow);
   }
 
-  async countVaults(timeoutMs?: number): Promise<number> {
-    const countResult = await query<{ count: string }>(
-      "SELECT COUNT(*) as count FROM vaults",
-      [],
-      timeoutMs ? { timeoutMs } : undefined,
   async listCategories(): Promise<string[]> {
     const rows = await query<{ rwa_category: string | null }>(
       "SELECT DISTINCT rwa_category FROM vaults WHERE rwa_category IS NOT NULL AND archived = FALSE ORDER BY rwa_category ASC",
@@ -832,7 +798,6 @@ export class VaultService {
        FROM vaults v
        WHERE v.contract_id = $1`,
       [contractId],
-      timeoutMs ? { timeoutMs } : undefined,
     );
 
     if (rows.length === 0) return null;
@@ -843,7 +808,6 @@ export class VaultService {
     return vault;
   }
 
-  async getVaultPositions(contractId: string, timeoutMs?: number): Promise<UserVaultPosition[]> {
   /**
    * List every user's share position in a vault, most shares first.
    * Unlike `listVaultHolders`, this is not paginated and includes positions
@@ -871,7 +835,6 @@ export class VaultService {
        WHERE v.contract_id = $1
        ORDER BY uvp.shares DESC`,
       [contractId],
-      timeoutMs ? { timeoutMs } : undefined,
     );
 
     return rows.map((row) => ({
