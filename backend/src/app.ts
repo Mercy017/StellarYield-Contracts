@@ -22,6 +22,23 @@ import { cacheControl } from "./api/middleware/cacheControl.js";
 import { internalAuth } from "./api/middleware/internalAuth.js";
 import { internalRouter } from "./api/routes/internal.js";
 import { publicLimiter, authLimiter } from "./api/middleware/rateLimit.js";
+import { staticCacheMiddleware, cacheResponse, getCachedResponse } from "./api/middleware/responseCache.js";
+import { queryTimeoutMiddleware } from "./api/middleware/queryTimeout.js";
+
+// Cache static responses at startup
+function initStaticCache(): void {
+  const openapiSpec = {
+    openapi: "3.0.3",
+    info: { title: "StellarYield API", version: "1.0.0" },
+    paths: {},
+  };
+  cacheResponse("openapi.json", openapiSpec, 200, { "Content-Type": "application/json" });
+
+  const changelog = { version: "1.0.0", changes: [] };
+  cacheResponse("changelog", changelog, 200, { "Content-Type": "application/json" });
+}
+
+initStaticCache();
 import { httpRequestsTotal, getMetrics } from "./services/metrics.js";
 import { setupOpenApiRoutes } from "./services/openapi.js";
 import { schema } from "./graphql/schema.js";
