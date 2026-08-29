@@ -5,6 +5,8 @@ import { logger } from "../logger.js";
 import { sseService } from "./sse.js";
 import { jobQueue } from "./jobQueue.js";
 import { sendEmail } from "./email.js";
+import { resolveUserEvent } from "./notificationEvents.js";
+import { isDeliveryEnabled } from "./notificationPreferences.js";
 
 const BLOCKED_HOSTNAMES = new Set([
   "localhost",
@@ -86,11 +88,33 @@ export class NotificationService {
 
     if (webhooks.length === 0) return;
 
+    // For user-specific events (deposit, withdrawal, yield claim), drop any
+    // channel the affected user has opted out of. Users with no preference
+    // row default to enabled (#990).
+    let deliverable = webhooks;
+    const resolved = resolveUserEvent(event, data);
+    if (resolved) {
+      const vaultContractId =
+        typeof data["contractId"] === "string" ? (data["contractId"] as string) : null;
+      const allowed = await Promise.all(
+        webhooks.map((webhook) =>
+          isDeliveryEnabled(
+            resolved.userAddress,
+            resolved.eventType,
+            webhook.channel ?? "webhook",
+            vaultContractId,
+          ),
+        ),
+      );
+      deliverable = webhooks.filter((_, i) => allowed[i]);
+      if (deliverable.length === 0) return;
+    }
+
     // Attempt channels in ascending priority order (lower value = higher
     // priority). Channels that share a priority are dispatched concurrently;
     // each priority tier is enqueued before the next one starts (#1025).
     const tiers = new Map<number, WebhookRow[]>();
-    for (const webhook of webhooks) {
+    for (const webhook of deliverable) {
       const tier = tiers.get(webhook.priority) ?? [];
       tier.push(webhook);
       tiers.set(webhook.priority, tier);

@@ -11,22 +11,7 @@ import { getWebhookStream } from "../controllers/webhooks-stream.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { validateBody, validateParams } from "../middleware/validate.js";
 import { sseLimitPerIp } from "../middleware/sseLimitPerIp.js";
-
-const KNOWN_EVENTS = [
-  "deposit",
-  "withdraw",
-  "yield_distributed",
-  "vault_state_changed",
-  "vault_created",
-  "cancel_funding",
-  "request_early_redemption",
-  "user.deposit",
-  "user.withdraw",
-  "user.early_redemption_requested",
-  "vault.cancelled",
-  "vault.matured",
-  "vault.funded",
-] as const;
+import { KNOWN_EVENTS } from "../../services/notificationEvents.js";
 
 const KNOWN_CHANNELS = ["webhook", "email", "slack"] as const;
 
