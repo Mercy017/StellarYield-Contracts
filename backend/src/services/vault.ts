@@ -1,7 +1,6 @@
-import type { Vault, UserVaultPosition, PaginatedResponse } from "../types/index.js";
-import { query, queryPrepared, registerPreparedStatement } from "../db/index.js";
 import type { Vault, VaultOperator, UserVaultPosition, PaginatedResponse, VaultHolder, VaultHolderSort, OperatorLogEntry } from "../types/index.js";
 import { query } from "../db/index.js";
+import * as db from "../db/index.js";
 import { logger } from "../logger.js";
 import { cacheGet, cacheSet, cacheDel } from "../cache/redis.js";
 import { xdr, scValToNative } from "@stellar/stellar-sdk";
@@ -334,8 +333,8 @@ export function parseVaultSort(
 }
 
 // Register hot query prepared statements at module load
-if (typeof registerPreparedStatement === "function") {
-  registerPreparedStatement(
+if (typeof (db as any).registerPreparedStatement === "function") {
+  (db as any).registerPreparedStatement(
     "list_vaults",
     `SELECT v.id, v.contract_id, v.factory_id, v.asset, v.name, v.symbol, v.state,
             v.total_assets, v.total_supply, v.created_at, v.updated_at,
@@ -349,14 +348,14 @@ if (typeof registerPreparedStatement === "function") {
      LIMIT $1 OFFSET $2`
   );
 
-  registerPreparedStatement(
+  (db as any).registerPreparedStatement(
     "latest_epoch_per_vault",
     `SELECT DISTINCT ON (e.vault_id) e.vault_id, e.epoch, e.yield_amount, e.total_shares, e.distributed_at
      FROM epochs e
      ORDER BY e.vault_id, e.epoch DESC`
   );
 
-  registerPreparedStatement(
+  (db as any).registerPreparedStatement(
     "tvl_history",
     `SELECT v.contract_id, v.total_assets, v.updated_at
      FROM vaults v
