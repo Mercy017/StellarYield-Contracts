@@ -57,10 +57,7 @@ export async function listVaults(req: Request, res: Response, next: NextFunction
       q?: string;
       filter?: string;
       fields?: string;
-    };
-    const result = await vaultService.listVaults({ page, pageSize, state, sort, order }, req.queryTimeoutMs);
 
-    // Parse and validate `filter` if provided
     let parsedFilter: any | undefined;
     if (typeof filter === "string" && filter.trim() !== "") {
       try {

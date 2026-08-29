@@ -54,7 +54,7 @@ function _hashKey(plaintext: string): string {
 
 describe("Admin Controller", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("returns per-vault fee metrics ordered by total fees and applies date filters", async () => {
