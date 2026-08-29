@@ -58,6 +58,7 @@ export async function listVaults(req: Request, res: Response, next: NextFunction
       filter?: string;
       fields?: string;
     };
+    const result = await vaultService.listVaults({ page, pageSize, state, sort, order }, req.queryTimeoutMs);
 
     // Parse and validate `filter` if provided
     let parsedFilter: any | undefined;
@@ -110,9 +111,9 @@ export async function listVaults(req: Request, res: Response, next: NextFunction
   }
 }
 
-export async function getVaultCount(_req: Request, res: Response, next: NextFunction) {
+export async function getVaultCount(req: Request, res: Response, next: NextFunction) {
   try {
-    const total = await vaultService.countVaults();
+    const total = await vaultService.countVaults(req.queryTimeoutMs);
     setCacheHeaders(res);
     res.json({ total });
   } catch (err) {
@@ -143,7 +144,10 @@ export async function getVaultAggregates(req: Request, res: Response, next: Next
 
 export async function listVaultsByFactory(req: Request, res: Response, next: NextFunction) {
   try {
-    const vaults = await vaultService.listVaultsByFactory(String(req.params["factoryId"]));
+    const vaults = await vaultService.listVaultsByFactory(
+      String(req.params["factoryId"]),
+      req.queryTimeoutMs,
+    );
     setCacheHeaders(res);
     res.json(vaults);
   } catch (err) {
@@ -307,7 +311,10 @@ export async function getVaultLiveTotalAssets(req: Request, res: Response, next:
 
 export async function getVaultPositions(req: Request, res: Response, next: NextFunction) {
   try {
-    const positions = await vaultService.getVaultPositions(String(req.params["contractId"]));
+    const positions = await vaultService.getVaultPositions(
+      String(req.params["contractId"]),
+      req.queryTimeoutMs,
+    );
     res.json(positions);
   } catch (err) {
     next(err);
