@@ -333,35 +333,40 @@ export function parseVaultSort(
 }
 
 // Register hot query prepared statements at module load
-if (typeof (db as any).registerPreparedStatement === "function") {
-  (db as any).registerPreparedStatement(
-    "list_vaults",
-    `SELECT v.id, v.contract_id, v.factory_id, v.asset, v.name, v.symbol, v.state,
-            v.total_assets, v.total_supply, v.created_at, v.updated_at,
-            COALESCE((
-              SELECT COUNT(*)::int
-              FROM user_vault_positions uvp
-              WHERE uvp.vault_id = v.id AND uvp.shares > 0
-            ), 0) AS depositor_count
-     FROM vaults v
-     ORDER BY v.created_at DESC
-     LIMIT $1 OFFSET $2`
-  );
+try {
+  const registerFn = (db as any)["registerPreparedStatement"];
+  if (typeof registerFn === "function") {
+    registerFn(
+      "list_vaults",
+      `SELECT v.id, v.contract_id, v.factory_id, v.asset, v.name, v.symbol, v.state,
+              v.total_assets, v.total_supply, v.created_at, v.updated_at,
+              COALESCE((
+                SELECT COUNT(*)::int
+                FROM user_vault_positions uvp
+                WHERE uvp.vault_id = v.id AND uvp.shares > 0
+              ), 0) AS depositor_count
+       FROM vaults v
+       ORDER BY v.created_at DESC
+       LIMIT $1 OFFSET $2`
+    );
 
-  (db as any).registerPreparedStatement(
-    "latest_epoch_per_vault",
-    `SELECT DISTINCT ON (e.vault_id) e.vault_id, e.epoch, e.yield_amount, e.total_shares, e.distributed_at
-     FROM epochs e
-     ORDER BY e.vault_id, e.epoch DESC`
-  );
+    registerFn(
+      "latest_epoch_per_vault",
+      `SELECT DISTINCT ON (e.vault_id) e.vault_id, e.epoch, e.yield_amount, e.total_shares, e.distributed_at
+       FROM epochs e
+       ORDER BY e.vault_id, e.epoch DESC`
+    );
 
-  (db as any).registerPreparedStatement(
-    "tvl_history",
-    `SELECT v.contract_id, v.total_assets, v.updated_at
-     FROM vaults v
-     ORDER BY v.updated_at DESC
-     LIMIT $1`
-  );
+    registerFn(
+      "tvl_history",
+      `SELECT v.contract_id, v.total_assets, v.updated_at
+       FROM vaults v
+       ORDER BY v.updated_at DESC
+       LIMIT $1`
+    );
+  }
+} catch {
+  // Ignored in unit test environments where db/index.js is partially mocked
 }
 
 interface ListVaultsOptions {

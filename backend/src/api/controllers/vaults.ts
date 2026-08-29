@@ -57,6 +57,7 @@ export async function listVaults(req: Request, res: Response, next: NextFunction
       q?: string;
       filter?: string;
       fields?: string;
+    };
 
     let parsedFilter: any | undefined;
     if (typeof filter === "string" && filter.trim() !== "") {
