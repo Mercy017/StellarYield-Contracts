@@ -1,8 +1,10 @@
 import pg from "pg";
 import { performance } from "node:perf_hooks";
+import crypto from "node:crypto";
 import { trace, SpanStatusCode, context } from "@opentelemetry/api";
 import { config } from "../config.js";
 import { logger } from "../logger.js";
+import { getCurrentRoute } from "../api/middleware/requestContext.js";
 
 const tracer = trace.getTracer("stellaryield-db");
 
@@ -15,6 +17,28 @@ export const pool = new Pool({
   idleTimeoutMillis: config.db.idleTimeoutMs,
   query_timeout: config.db.queryTimeoutMs,
 });
+
+export function redactQueryParameters(sql: string): string {
+  return sql
+    .replace(/'[^']*'/g, "'[REDACTED]'")
+    .replace(/"[^"]*"/g, '"[REDACTED]"')
+    .trim();
+}
+
+async function logSlowQuery(sql: string, durationMs: number): Promise<void> {
+  try {
+    const queryHash = crypto.createHash("sha256").update(sql).digest("hex");
+    const queryPreview = redactQueryParameters(sql).slice(0, 200);
+    const route = getCurrentRoute();
+    await pool.query(
+      `INSERT INTO slow_query_log (query_hash, query_preview, duration_ms, route)
+       VALUES ($1, $2, $3, $4)`,
+      [queryHash, queryPreview, durationMs, route],
+    );
+  } catch (err) {
+    logger.error({ err }, "Failed to log slow query");
+  }
+}
 
 export async function query<T = Record<string, unknown>>(
   sql: string,
@@ -36,6 +60,9 @@ export async function query<T = Record<string, unknown>>(
         { sql, paramsCount: params?.length ?? 0, durationMs: roundedMs, rowCount: result.rowCount },
         "slow query",
       );
+      if (!sql.includes("slow_query_log")) {
+        logSlowQuery(sql, roundedMs).catch(() => {});
+      }
     } else if (logger.level === "debug" || logger.level === "trace") {
       const firstLine = config.nodeEnv === "production" ? sql.slice(0, 80) : sql;
       logger.debug({ sql: firstLine, durationMs: roundedMs, rowCount: result.rowCount }, "query");
