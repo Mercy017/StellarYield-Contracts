@@ -1,7 +1,37 @@
 import type { Vault, UserVaultPosition, PaginatedResponse } from "../types/index.js";
-import { query } from "../db/index.js";
+import { query, queryPrepared, registerPreparedStatement } from "../db/index.js";
 import { logger } from "../logger.js";
 import { EventEmitter } from "events";
+
+// Register hot query prepared statements at module load
+registerPreparedStatement(
+  "list_vaults",
+  `SELECT v.id, v.contract_id, v.factory_id, v.asset, v.name, v.symbol, v.state,
+          v.total_assets, v.total_supply, v.created_at, v.updated_at,
+          COALESCE((
+            SELECT COUNT(*)::int
+            FROM user_vault_positions uvp
+            WHERE uvp.vault_id = v.id AND uvp.shares > 0
+          ), 0) AS depositor_count
+   FROM vaults v
+   ORDER BY v.created_at DESC
+   LIMIT $1 OFFSET $2`
+);
+
+registerPreparedStatement(
+  "latest_epoch_per_vault",
+  `SELECT DISTINCT ON (e.vault_id) e.vault_id, e.epoch, e.yield_amount, e.total_shares, e.distributed_at
+   FROM epochs e
+   ORDER BY e.vault_id, e.epoch DESC`
+);
+
+registerPreparedStatement(
+  "tvl_history",
+  `SELECT v.contract_id, v.total_assets, v.updated_at
+   FROM vaults v
+   ORDER BY v.updated_at DESC
+   LIMIT $1`
+);
 
 interface ListVaultsOptions {
   page: number;
@@ -56,32 +86,39 @@ export class VaultService {
     return () => this.emitter.off("vault:updated", listener);
   }
 
-  async listVaults(opts: ListVaultsOptions): Promise<PaginatedResponse<Vault>> {
+  async listVaults(opts: ListVaultsOptions, timeoutMs?: number): Promise<PaginatedResponse<Vault>> {
     const { page, pageSize, state, sort, order } = opts;
     const offset = (page - 1) * pageSize;
     const sortColumn = sort === "total_assets" ? "total_assets" : "created_at";
     const sortDirection = order === "asc" ? "ASC" : "DESC";
+    const queryOpts = timeoutMs ? { timeoutMs } : undefined;
 
     // Build WHERE clause if state filter is provided
     const whereClause = state ? "WHERE v.state = $3" : "";
     const params: any[] = [pageSize, offset];
     if (state) params.push(state);
 
-    // Query vaults with pagination
-    const vaults = await query<VaultRow>(
-      `SELECT v.id, v.contract_id, v.factory_id, v.asset, v.name, v.symbol, v.state,
-              v.total_assets, v.total_supply, v.created_at, v.updated_at,
-              COALESCE((
-                SELECT COUNT(*)::int
-                FROM user_vault_positions uvp
-                WHERE uvp.vault_id = v.id AND uvp.shares > 0
-              ), 0) AS depositor_count
-       FROM vaults v
-       ${whereClause}
-       ORDER BY v.${sortColumn} ${sortDirection}
-       LIMIT $1 OFFSET $2`,
-      params,
-    );
+    // Use prepared statement for unfiltered queries (most common hot path)
+    let vaults: VaultRow[];
+    if (!state && sortColumn === "created_at" && sortDirection === "DESC") {
+      vaults = await queryPrepared<VaultRow>("list_vaults", [pageSize, offset], queryOpts);
+    } else {
+      vaults = await query<VaultRow>(
+        `SELECT v.id, v.contract_id, v.factory_id, v.asset, v.name, v.symbol, v.state,
+                v.total_assets, v.total_supply, v.created_at, v.updated_at,
+                COALESCE((
+                  SELECT COUNT(*)::int
+                  FROM user_vault_positions uvp
+                  WHERE uvp.vault_id = v.id AND uvp.shares > 0
+                ), 0) AS depositor_count
+         FROM vaults v
+         ${whereClause}
+         ORDER BY v.${sortColumn} ${sortDirection}
+         LIMIT $1 OFFSET $2`,
+        params,
+        queryOpts,
+      );
+    }
 
     // Get total count
     const countResult = await query<{ count: string }>(
@@ -89,6 +126,7 @@ export class VaultService {
        FROM vaults v
        ${state ? "WHERE v.state = $1" : ""}`,
       state ? [state] : [],
+      queryOpts,
     );
     const total = parseInt(countResult[0]?.count ?? "0", 10);
 
@@ -103,14 +141,16 @@ export class VaultService {
     };
   }
 
-  async countVaults(): Promise<number> {
+  async countVaults(timeoutMs?: number): Promise<number> {
     const countResult = await query<{ count: string }>(
       "SELECT COUNT(*) as count FROM vaults",
+      [],
+      timeoutMs ? { timeoutMs } : undefined,
     );
     return parseInt(countResult[0]?.count ?? "0", 10);
   }
 
-  async listVaultsByFactory(factoryId: string): Promise<Vault[]> {
+  async listVaultsByFactory(factoryId: string, timeoutMs?: number): Promise<Vault[]> {
     const rows = await query<VaultRow>(
       `SELECT v.id, v.contract_id, v.factory_id, v.asset, v.name, v.symbol, v.state,
               v.total_assets, v.total_supply, v.created_at, v.updated_at,
@@ -123,12 +163,13 @@ export class VaultService {
        WHERE v.factory_id = $1
        ORDER BY v.created_at DESC`,
       [factoryId],
+      timeoutMs ? { timeoutMs } : undefined,
     );
 
     return rows.map(mapVaultRow);
   }
 
-  async getVault(contractId: string): Promise<Vault | null> {
+  async getVault(contractId: string, timeoutMs?: number): Promise<Vault | null> {
     const rows = await query<VaultRow>(
       `SELECT v.id, v.contract_id, v.factory_id, v.asset, v.name, v.symbol, v.state,
               v.total_assets, v.total_supply, v.created_at, v.updated_at,
@@ -140,6 +181,7 @@ export class VaultService {
        FROM vaults v
        WHERE v.contract_id = $1`,
       [contractId],
+      timeoutMs ? { timeoutMs } : undefined,
     );
 
     if (rows.length === 0) return null;
@@ -147,7 +189,7 @@ export class VaultService {
     return mapVaultRow(rows[0]);
   }
 
-  async getVaultPositions(contractId: string): Promise<UserVaultPosition[]> {
+  async getVaultPositions(contractId: string, timeoutMs?: number): Promise<UserVaultPosition[]> {
     const rows = await query<{
       id: number;
       user_address: string;
@@ -164,6 +206,7 @@ export class VaultService {
        WHERE v.contract_id = $1
        ORDER BY uvp.shares DESC`,
       [contractId],
+      timeoutMs ? { timeoutMs } : undefined,
     );
 
     return rows.map((row) => ({

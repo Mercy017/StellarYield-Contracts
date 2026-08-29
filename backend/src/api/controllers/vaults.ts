@@ -24,7 +24,7 @@ export async function listVaults(req: Request, res: Response, next: NextFunction
       sort: "created_at" | "total_assets";
       order: "asc" | "desc";
     };
-    const result = await vaultService.listVaults({ page, pageSize, state, sort, order });
+    const result = await vaultService.listVaults({ page, pageSize, state, sort, order }, req.queryTimeoutMs);
     setCacheHeaders(res);
     res.json(result);
   } catch (err) {
@@ -32,9 +32,9 @@ export async function listVaults(req: Request, res: Response, next: NextFunction
   }
 }
 
-export async function getVaultCount(_req: Request, res: Response, next: NextFunction) {
+export async function getVaultCount(req: Request, res: Response, next: NextFunction) {
   try {
-    const total = await vaultService.countVaults();
+    const total = await vaultService.countVaults(req.queryTimeoutMs);
     setCacheHeaders(res);
     res.json({ total });
   } catch (err) {
@@ -44,7 +44,10 @@ export async function getVaultCount(_req: Request, res: Response, next: NextFunc
 
 export async function listVaultsByFactory(req: Request, res: Response, next: NextFunction) {
   try {
-    const vaults = await vaultService.listVaultsByFactory(String(req.params["factoryId"]));
+    const vaults = await vaultService.listVaultsByFactory(
+      String(req.params["factoryId"]),
+      req.queryTimeoutMs,
+    );
     setCacheHeaders(res);
     res.json(vaults);
   } catch (err) {
@@ -54,7 +57,10 @@ export async function listVaultsByFactory(req: Request, res: Response, next: Nex
 
 export async function getVault(req: Request, res: Response, next: NextFunction) {
   try {
-    const vault = await vaultService.getVault(String(req.params["contractId"]));
+    const vault = await vaultService.getVault(
+      String(req.params["contractId"]),
+      req.queryTimeoutMs,
+    );
     if (!vault) {
       throw new AppError(ErrorCode.VAULT_NOT_FOUND, "Vault not found", 404);
     }
@@ -85,7 +91,10 @@ export async function getVaultLiveTotalAssets(req: Request, res: Response, next:
 
 export async function getVaultPositions(req: Request, res: Response, next: NextFunction) {
   try {
-    const positions = await vaultService.getVaultPositions(String(req.params["contractId"]));
+    const positions = await vaultService.getVaultPositions(
+      String(req.params["contractId"]),
+      req.queryTimeoutMs,
+    );
     res.json(positions);
   } catch (err) {
     next(err);

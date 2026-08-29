@@ -68,6 +68,11 @@ const envSchema = z.object({
     .default("600")
     .transform((v) => parseInt(v, 10))
     .pipe(z.number().int().min(0)),
+  QUERY_TIMEOUT_MS: z
+    .string()
+    .default("30000")
+    .transform((v) => parseInt(v, 10))
+    .pipe(z.number().int().min(100)),
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -120,4 +125,12 @@ export const config = {
   cors: {
     maxAge: parsed.data.CORS_MAX_AGE,
   },
+
+  queryTimeoutMs: parsed.data.QUERY_TIMEOUT_MS,
+
+  routeQueryTimeoutsMs: {
+    "/api/v1/yields/:contractId/apy-history": 5000,
+    "/api/v1/yields/:contractId/summary": 10000,
+    "/api/v1/vaults": 10000,
+  } as Record<string, number>,
 } as const;

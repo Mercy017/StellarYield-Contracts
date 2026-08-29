@@ -5,7 +5,10 @@ const yieldService = new YieldService();
 
 export async function getVaultEpochs(req: Request, res: Response, next: NextFunction) {
   try {
-    const epochs = await yieldService.getVaultEpochs(String(req.params["contractId"]));
+    const epochs = await yieldService.getVaultEpochs(
+      String(req.params["contractId"]),
+      req.queryTimeoutMs,
+    );
     res.json(
       epochs.map((e) => ({
         ...e,
@@ -22,6 +25,7 @@ export async function getUserPendingYield(req: Request, res: Response, next: Nex
     const result = await yieldService.getUserPendingYield(
       String(req.params["contractId"]),
       String(req.params["userAddress"]),
+      req.queryTimeoutMs,
     );
     res.json(result);
   } catch (err) {
@@ -31,7 +35,10 @@ export async function getUserPendingYield(req: Request, res: Response, next: Nex
 
 export async function getYieldSummary(req: Request, res: Response, next: NextFunction) {
   try {
-    const summary = await yieldService.getYieldSummary(String(req.params["contractId"]));
+    const summary = await yieldService.getYieldSummary(
+      String(req.params["contractId"]),
+      req.queryTimeoutMs,
+    );
     res.json(summary);
   } catch (err) {
     next(err);

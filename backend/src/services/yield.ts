@@ -2,7 +2,7 @@ import type { Epoch } from "../types/index.js";
 import { query } from "../db/index.js";
 
 export class YieldService {
-  async getVaultEpochs(contractId: string): Promise<Epoch[]> {
+  async getVaultEpochs(contractId: string, timeoutMs?: number): Promise<Epoch[]> {
     const rows = await query<{
       id: number;
       vault_id: number;
@@ -17,6 +17,7 @@ export class YieldService {
        WHERE v.contract_id = $1
        ORDER BY e.epoch ASC`,
       [contractId],
+      timeoutMs ? { timeoutMs } : undefined,
     );
 
     return rows.map((row) => ({
@@ -32,7 +33,9 @@ export class YieldService {
   async getUserPendingYield(
     contractId: string,
     userAddress: string,
+    timeoutMs?: number,
   ): Promise<{ pendingYield: string; epochs: number[]; claimedEpochs: number[] }> {
+    const opts = timeoutMs ? { timeoutMs } : undefined;
     const positionRows = await query<{
       shares: string;
       last_claimed_epoch: number;
@@ -42,6 +45,7 @@ export class YieldService {
        JOIN vaults v ON uvp.vault_id = v.id
        WHERE v.contract_id = $1 AND uvp.user_address = $2`,
       [contractId, userAddress],
+      opts,
     );
 
     const position = positionRows[0];
@@ -59,6 +63,7 @@ export class YieldService {
        WHERE v.contract_id = $1
        ORDER BY e.epoch ASC`,
       [contractId],
+      opts,
     );
 
     const pendingEpochs: number[] = [];
@@ -84,7 +89,7 @@ export class YieldService {
     };
   }
 
-  async getYieldSummary(contractId: string): Promise<{
+  async getYieldSummary(contractId: string, timeoutMs?: number): Promise<{
     totalEpochs: string;
     totalYieldDistributed: string;
     averageYieldPerEpoch: string;
@@ -106,6 +111,7 @@ export class YieldService {
        JOIN vaults v ON e.vault_id = v.id
        WHERE v.contract_id = $1`,
       [contractId],
+      timeoutMs ? { timeoutMs } : undefined,
     );
 
     const totalEpochs = BigInt(rows[0]?.total_epochs ?? "0");
