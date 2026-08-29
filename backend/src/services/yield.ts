@@ -80,6 +80,8 @@ export class YieldService {
        ) ie ON TRUE
        WHERE v.contract_id = $1${yieldFilterSql}
        ORDER BY e.epoch ASC`,
+      [contractId],
+      timeoutMs ? { timeoutMs } : undefined,
       params,
     );
 
@@ -288,7 +290,9 @@ export class YieldService {
   async getUserPendingYield(
     contractId: string,
     userAddress: string,
+    timeoutMs?: number,
   ): Promise<{ pendingYield: string; epochs: number[]; claimedEpochs: number[] }> {
+    const opts = timeoutMs ? { timeoutMs } : undefined;
     const cacheKey = `pending-yield:${contractId}:${userAddress}`;
     const cached = await cacheGet<{ pendingYield: string; epochs: number[]; claimedEpochs: number[] }>(cacheKey);
     if (cached) return cached;
@@ -302,6 +306,7 @@ export class YieldService {
        JOIN vaults v ON uvp.vault_id = v.id
        WHERE v.contract_id = $1 AND uvp.user_address = $2`,
       [contractId, userAddress],
+      opts,
     );
 
     const position = positionRows[0];
@@ -321,6 +326,7 @@ export class YieldService {
          AND (e.expires_at IS NULL OR e.expires_at > NOW())
        ORDER BY e.epoch ASC`,
       [contractId],
+      opts,
     );
 
     const pendingEpochs: number[] = [];
@@ -381,6 +387,7 @@ export class YieldService {
        JOIN vaults v ON e.vault_id = v.id
        WHERE v.contract_id = $1`,
       [contractId],
+      timeoutMs ? { timeoutMs } : undefined,
     );
 
     const totalEpochs = BigInt(rows[0]?.total_epochs ?? "0");
