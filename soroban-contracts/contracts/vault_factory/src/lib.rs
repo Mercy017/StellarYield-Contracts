@@ -168,7 +168,11 @@ impl VaultFactory {
     pub fn create_single_rwa_vault_full(
         e: &Env,
         caller: Address,
-        params: CreateVaultParams,
+        // Declared as the concrete struct, not the `CreateVaultParams` alias:
+        // type aliases are erased from the generated contract spec, which leaves
+        // the CLI unable to resolve the argument type ("Missing Entry
+        // CreateVaultParams") and blocks even deploying the factory.
+        params: BatchVaultParams,
     ) -> Address {
         caller.require_auth();
         require_current_schema(e);
@@ -200,7 +204,11 @@ impl VaultFactory {
     pub fn create_single_rwa_vault_batch(
         e: &Env,
         caller: Address,
-        params: CreateVaultParams,
+        // Declared as the concrete struct, not the `CreateVaultParams` alias:
+        // type aliases are erased from the generated contract spec, which leaves
+        // the CLI unable to resolve the argument type ("Missing Entry
+        // CreateVaultParams") and blocks even deploying the factory.
+        params: BatchVaultParams,
     ) -> Address {
         caller.require_auth();
         require_current_schema(e);
@@ -389,6 +397,40 @@ impl VaultFactory {
             active: info.active,
             created_at: info.created_at,
         })
+    }
+
+    /// Preview the shares a deposit of `assets` would mint, for each
+    /// `(vault, assets)` pair, in a single call (issue #1008).
+    ///
+    /// Delegates to each vault's own `preview_deposit` (ERC-4626 semantics —
+    /// rounds down, favors the vault). Skips any address not registered with
+    /// this factory rather than panicking, so a caller can batch-preview
+    /// across a mixed list without one bad address failing the whole call.
+    ///
+    /// # Arguments
+    /// * `requests` - `(vault_address, assets)` pairs to preview
+    ///
+    /// # Returns
+    /// `Vec<Option<i128>>` in the same order as `requests`; `None` for any
+    /// vault not registered with this factory.
+    pub fn bulk_preview_deposit(
+        e: &Env,
+        requests: Vec<(Address, i128)>,
+    ) -> Vec<Option<i128>> {
+        let mut results: Vec<Option<i128>> = Vec::new(e);
+        let preview_symbol = soroban_sdk::Symbol::new(e, "preview_deposit");
+
+        for (vault, assets) in requests.iter() {
+            if get_vault_info(e, &vault).is_none() {
+                results.push_back(None);
+                continue;
+            }
+            let args: Vec<soroban_sdk::Val> = soroban_sdk::vec![e, assets.into()];
+            let shares: i128 = e.invoke_contract(&vault, &preview_symbol, args);
+            results.push_back(Some(shares));
+        }
+
+        results
     }
 
     pub fn is_registered_vault(e: &Env, vault: Address) -> bool {
@@ -800,6 +842,11 @@ impl VaultFactory {
     pub fn default_zkme_verifier(e: &Env) -> Address {
         get_default_zkme_verifier(e)
     }
+    /// Returns the factory-wide default operator fee (in basis points) applied
+    /// to newly deployed vaults that don't specify their own fee.
+    pub fn default_operator_fee_bps(e: &Env) -> u32 {
+        get_default_fee_bps(e)
+    }
     /// Returns the cooperator address currently configured as the factory-wide
     /// default for new vault deployments.
     ///
@@ -894,17 +941,19 @@ impl VaultFactory {
         let coop = get_default_cooperator(e);
 
         // Deploy a fresh vault contract instance.
-        // The salt combines a monotonic counter, the vault name, and the
-        // current timestamp to ensure every vault has a unique address and
-        // to prevent collisions even if the registry count decreases.
+        //
+        // The salt combines a monotonic deploy counter with the vault name. The
+        // counter never decreases, so that pair is already unique per vault.
+        //
+        // The ledger timestamp is deliberately NOT part of the salt: it makes
+        // the derived address differ between simulation and execution (they land
+        // in different ledgers), so the footprint computed during preflight never
+        // matches the address actually written, and submission traps with
+        // InvokeHostFunction(Trapped).
         let counter = increment_vault_deploy_counter(e);
         let mut salt_bytes = soroban_sdk::Bytes::new(e);
         salt_bytes.append(&soroban_sdk::Bytes::from_slice(e, &counter.to_be_bytes()));
         salt_bytes.append(&name.clone().to_xdr(e));
-        salt_bytes.append(&soroban_sdk::Bytes::from_slice(
-            e,
-            &e.ledger().timestamp().to_be_bytes(),
-        ));
         let salt = e.crypto().sha256(&salt_bytes);
 
         // Build the InitParams struct for the vault constructor.
@@ -928,6 +977,13 @@ impl VaultFactory {
             rwa_document_uri,
             rwa_category,
             expected_apy,
+            lock_up_period: 0u64,
+            // These three must be present for the vault's `InitParams` to unpack;
+            // omitting them makes every `create_*_vault` call trap with
+            // Error(Object, UnexpectedSize) inside the vault constructor.
+            operator_fee_bps: 0u32,      // no operator cut on distributed yield
+            timelock_delay: 172_800u64,  // 48 hours, matching the vault's own default
+            yield_vesting_period: 0u64,  // yield claimable immediately
         };
 
         let vault_addr = e
@@ -964,12 +1020,9 @@ impl VaultFactory {
             VaultType::SingleRwa,
             name,
             e.current_contract_address(),
-<<<<<<< feature/vault-response-fields-and-ci
             early_redemption_fee_bps, // #515 operator_fee_bps
             maturity_date,            // #516 maturity_date
             expected_apy,             // #517 expected_apy
-=======
->>>>>>> main
         );
 
         bump_instance(e);

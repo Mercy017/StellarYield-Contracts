@@ -25,9 +25,9 @@ export class AppError extends Error {
   }
 }
 
-export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
-  logger.error(err, "Unhandled error");
-  
+export const errorHandler: ErrorRequestHandler = (err, req, res, _next) => {
+  (req.log ?? logger).error(err, "Unhandled error");
+
   if (err instanceof AppError) {
     res.status(err.statusCode).json({
       code: err.code,
@@ -36,7 +36,7 @@ export const errorHandler: ErrorRequestHandler = (err, _req, res, _next) => {
     });
     return;
   }
-  
+
   res.status(err.statusCode ?? 500).json({
     code: ErrorCode.INTERNAL_SERVER_ERROR,
     error: err.name ?? "InternalServerError",
