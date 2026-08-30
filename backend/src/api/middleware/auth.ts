@@ -11,6 +11,7 @@ interface ApiKey {
   label: string | null;
   expiresAt: Date | null;
   lastUsedAt: Date | null;
+  active: boolean;
 }
 
 interface AdminSessionClaims extends JwtPayload {
@@ -62,7 +63,7 @@ async function lookupApiKeyByPlaintext(plaintext: string): Promise<ApiKey | null
 
   try {
     const rows = (await query<ApiKey>(
-      `SELECT id, role, label, expires_at AS "expiresAt", last_used_at AS "lastUsedAt"
+      `SELECT id, role, label, expires_at AS "expiresAt", last_used_at AS "lastUsedAt", active
        FROM api_keys WHERE key_hash = $1`,
       [keyHash],
     )) ?? [];
@@ -90,6 +91,8 @@ function verifyAdminSession(token: string): ApiKey | null {
     // Session tokens are minted from an API key; the key itself was stamped at
     // login, so the derived session carries no last-used timestamp of its own.
     lastUsedAt: null,
+    // A session can only exist because an active key authenticated the login.
+    active: true,
   };
 }
 
@@ -229,6 +232,21 @@ export function requireApiKey(options?: { role?: string; minRole?: "readonly" | 
         reason: "key_not_found",
       });
       res.status(403).json({ error: "Forbidden", message: "Invalid API key" });
+      return;
+    }
+
+    // Keys deactivated by the inactivity sweep are rejected outright (#934).
+    if (apiKey.active === false) {
+      logger.info({
+        event: "auth_attempt",
+        success: false,
+        ip,
+        keyLabel: apiKey.label,
+        path: req.path,
+        method: req.method,
+        reason: "deactivated",
+      });
+      res.status(403).json({ error: "Forbidden", message: "API key has been deactivated" });
       return;
     }
 

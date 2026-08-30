@@ -156,6 +156,11 @@ const envSchema = z.object({
     .default("15000")
     .transform((v) => parseInt(v, 10))
     .pipe(z.number().int().min(1)),
+  KEY_INACTIVITY_DAYS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? parseInt(v, 10) : null))
+    .pipe(z.number().int().min(1).nullable().default(null)),
   YIELD_CLAIM_EXPIRY_DAYS: z
     .string()
     .optional()
@@ -286,6 +291,9 @@ export const config = {
   },
   sseHeartbeatMs: parsed.data.SSE_HEARTBEAT_MS,
   yieldClaimExpiryDays: parsed.data.YIELD_CLAIM_EXPIRY_DAYS,
+  // Days of inactivity after which an API key is deactivated; null disables
+  // the sweep entirely (#934).
+  apiKeyInactivityDays: parsed.data.KEY_INACTIVITY_DAYS,
   otelEndpoint: parsed.data.OTEL_EXPORTER_OTLP_ENDPOINT,
   sseReplayBufferSize: parsed.data.SSE_REPLAY_BUFFER,
   dbPoolAlertWaiting: parsed.data.DB_POOL_ALERT_WAITING,

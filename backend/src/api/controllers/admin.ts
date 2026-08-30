@@ -253,8 +253,10 @@ export async function getApiKeys(_req: Request, res: Response, next: NextFunctio
       created_at: Date;
       expires_at: Date | null;
       last_used_at: Date | null;
+      active: boolean;
+      deactivated_at: Date | null;
     }>(
-      `SELECT id, label, role, created_at, expires_at, last_used_at
+      `SELECT id, label, role, created_at, expires_at, last_used_at, active, deactivated_at
        FROM api_keys ORDER BY created_at DESC`,
     );
 
@@ -267,6 +269,9 @@ export async function getApiKeys(_req: Request, res: Response, next: NextFunctio
         expiresAt: row.expires_at,
         // null until the key authenticates a request for the first time (#933)
         lastUsedAt: row.last_used_at ?? null,
+        // false once the inactivity sweep has retired the key (#934)
+        active: row.active,
+        deactivatedAt: row.deactivated_at ?? null,
       })),
     );
   } catch (err) {

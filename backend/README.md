@@ -93,6 +93,7 @@ npm run dev
 | `INDEXER_POLL_INTERVAL_MS` | No | `5000` | Indexer polling interval. |
 | `WEBHOOK_SECRET` | No | empty | Optional webhook signing secret. |
 | `ADMIN_API_KEY` | No | empty | Admin API authentication key. |
+| `KEY_INACTIVITY_DAYS` | No | unset (never) | Days an API key may go unused before the daily sweep deactivates it. Never-used keys are measured from `created_at`. Deactivated keys are rejected with 403. |
 
 Docker Compose reads `.env.example` and overrides `DATABASE_URL` so the backend
 connects to the `postgres` service.
