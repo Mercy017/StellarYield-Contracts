@@ -184,6 +184,7 @@ erDiagram
         text key_hash UK
         text label
         text role
+        text_array allowed_methods
         boolean active
         timestamptz expires_at
         timestamptz last_used_at
@@ -381,6 +382,7 @@ Configured webhook endpoints for event notifications.
 | `url` | `TEXT` | NOT NULL | — | Webhook callback URL (HTTPS only) |
 | `events` | `TEXT[]` | NOT NULL | — | Array of subscribed event types |
 | `secret` | `TEXT` | YES | — | HMAC signing secret |
+| `allowed_methods` | `TEXT[]` | YES | — | HTTP methods this key may use; `NULL` means all methods (#935) |
 | `active` | `BOOLEAN` | YES | `true` | Whether the webhook is active |
 | `consecutive_failures` | `INT` | NOT NULL | `0` | Consecutive delivery failures |
 | `created_at` | `TIMESTAMPTZ` | YES | `NOW()` | Row creation timestamp |

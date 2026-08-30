@@ -255,8 +255,10 @@ export async function getApiKeys(_req: Request, res: Response, next: NextFunctio
       last_used_at: Date | null;
       active: boolean;
       deactivated_at: Date | null;
+      allowed_methods: string[] | null;
     }>(
-      `SELECT id, label, role, created_at, expires_at, last_used_at, active, deactivated_at
+      `SELECT id, label, role, created_at, expires_at, last_used_at, active, deactivated_at,
+              allowed_methods
        FROM api_keys ORDER BY created_at DESC`,
     );
 
@@ -272,6 +274,8 @@ export async function getApiKeys(_req: Request, res: Response, next: NextFunctio
         // false once the inactivity sweep has retired the key (#934)
         active: row.active,
         deactivatedAt: row.deactivated_at ?? null,
+        // null means the key may use any HTTP method (#935)
+        allowedMethods: row.allowed_methods ?? null,
       })),
     );
   } catch (err) {

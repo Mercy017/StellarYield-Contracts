@@ -12,6 +12,7 @@ interface ApiKey {
   expiresAt: Date | null;
   lastUsedAt: Date | null;
   active: boolean;
+  allowedMethods: string[] | null;
 }
 
 interface AdminSessionClaims extends JwtPayload {
@@ -63,7 +64,8 @@ async function lookupApiKeyByPlaintext(plaintext: string): Promise<ApiKey | null
 
   try {
     const rows = (await query<ApiKey>(
-      `SELECT id, role, label, expires_at AS "expiresAt", last_used_at AS "lastUsedAt", active
+      `SELECT id, role, label, expires_at AS "expiresAt", last_used_at AS "lastUsedAt", active,
+              allowed_methods AS "allowedMethods"
        FROM api_keys WHERE key_hash = $1`,
       [keyHash],
     )) ?? [];
@@ -93,6 +95,7 @@ function verifyAdminSession(token: string): ApiKey | null {
     lastUsedAt: null,
     // A session can only exist because an active key authenticated the login.
     active: true,
+    allowedMethods: null,
   };
 }
 
@@ -261,6 +264,26 @@ export function requireApiKey(options?: { role?: string; minRole?: "readonly" | 
         reason: "expired",
       });
       res.status(401).json({ error: "Unauthorized", message: "API key has expired" });
+      return;
+    }
+
+    // Per-key HTTP method scope (#935): a NULL column means every method is
+    // allowed, which is how every pre-existing key behaves.
+    const allowedMethods = apiKey.allowedMethods?.map((method) => method.toUpperCase());
+    if (allowedMethods && !allowedMethods.includes(req.method.toUpperCase())) {
+      logger.info({
+        event: "auth_attempt",
+        success: false,
+        ip,
+        keyLabel: apiKey.label,
+        path: req.path,
+        method: req.method,
+        reason: "method_not_allowed",
+      });
+      res.status(403).json({
+        error: "Forbidden",
+        message: `API key is not permitted to use the ${req.method} method`,
+      });
       return;
     }
 
