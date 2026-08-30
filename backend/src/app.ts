@@ -66,6 +66,17 @@ export function createApp(): Express {
   app.use(cacheControl());
 
   app.use((req, res, next) => {
+    if (config.sandboxMode) {
+      res.setHeader("X-Sandbox", "true");
+      if (
+        !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
+        !["/api/v1/admin/session", "/api/v1/admin/session/refresh", "/api/v1/admin/sandbox/reset"].includes(req.path)
+      ) {
+        res.status(200).json({ success: true });
+        return;
+      }
+    }
+
     res.on("finish", () => {
       const route = req.route?.path ?? req.path;
       httpRequestsTotal.inc({ method: req.method, route, status: res.statusCode });
