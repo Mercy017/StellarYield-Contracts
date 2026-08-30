@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
-import { query } from "../../db/index.js";
+import { query, pool } from "../../db/index.js";
 import { indexer } from "../../services/indexerSingleton.js";
 import { jobQueue } from "../../services/jobQueue.js";
 import { sseManager } from "../../services/sseManager.js";
@@ -1201,3 +1201,120 @@ export async function getSlowQueries(_req: Request, res: Response, next: NextFun
   }
 }
 
+// ── Issue #961: Benchmark reporting ──────────────────────────────────────────
+
+const benchmarkPostSchema = z.object({
+  name: z.string().min(1).max(255),
+  p50: z.number(),
+  p95: z.number(),
+  p99: z.number(),
+  errorRate: z.number().min(0).max(1),
+  timestamp: z.string().datetime(),
+}).strict();
+
+export async function postBenchmark(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = benchmarkPostSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "BadRequest", message: "Invalid benchmark payload", details: parsed.error.issues });
+      return;
+    }
+
+    const { name, p50, p95, p99, errorRate, timestamp } = parsed.data;
+
+    await query(
+      `INSERT INTO benchmark_results (name, p50, p95, p99, error_rate, timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [name, p50, p95, p99, errorRate, timestamp],
+    );
+
+    await logAdminAudit(req, "post_benchmark", `/api/v1/admin/benchmarks`);
+
+    res.status(201).json({ name, p50, p95, p99, errorRate, timestamp });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getBenchmarksByName(req: Request, res: Response, next: NextFunction) {
+  try {
+    const name = String(req.params["name"]);
+
+    const rows = await query<{
+      p50: number;
+      p95: number;
+      p99: number;
+      error_rate: number;
+      timestamp: Date;
+      created_at: Date;
+    }>(
+      `SELECT p50, p95, p99, error_rate, timestamp, created_at
+       FROM benchmark_results
+       WHERE name = $1
+       ORDER BY timestamp DESC`,
+      [name],
+    );
+
+    res.json({
+      name,
+      results: rows.map((r) => ({
+        p50: r.p50,
+        p95: r.p95,
+        p99: r.p99,
+        errorRate: r.error_rate,
+        timestamp: r.timestamp,
+        createdAt: r.created_at,
+      })),
+    );
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── Issue #962: Database VACUUM/ANALYZE ──────────────────────────────────────
+
+const APP_TABLES = [
+  "vaults", "users", "epochs", "user_vault_positions",
+  "indexed_events", "indexer_state", "webhooks", "webhook_deliveries",
+  "api_keys", "redemption_requests", "share_balance_snapshots",
+  "admin_audit_log", "app_config",
+];
+
+const vacuumSchema = z.object({
+  tables: z.array(z.string()).optional(),
+  analyze: z.boolean(),
+}).strict();
+
+export async function vacuumDatabase(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = vacuumSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "BadRequest", message: "Invalid payload", details: parsed.error.issues });
+      return;
+    }
+
+    const targetTables = parsed.data.tables?.length ? parsed.data.tables : APP_TABLES;
+    const analyze = parsed.data.analyze;
+    const command = analyze ? "VACUUM (ANALYZE)" : "VACUUM";
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      for (const table of targetTables) {
+        await client.query(`${command} ${table}`);
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    await logAdminAudit(req, "vacuum_database", "/api/v1/admin/db/vacuum");
+
+    res.json({ ok: true, tables: targetTables, analyze, command });
+  } catch (err) {
+    next(err);
+  }
+}

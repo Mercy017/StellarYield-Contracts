@@ -29,6 +29,9 @@ import {
   getUserComplianceSummary,
   getRetentionPolicy,
   patchRetentionPolicy,
+  postBenchmark,
+  getBenchmarksByName,
+  vacuumDatabase,
 } from "../controllers/admin.js";
 import { requireApiKey } from "../middleware/auth.js";
 import { ipAllowlist } from "../middleware/ipAllowlist.js";
@@ -75,4 +78,9 @@ adminRouter.patch("/retention-policy", patchRetentionPolicy);
 adminRouter.get("/jobs/dashboard", getJobQueueDashboard);
 adminRouter.get("/jobs/failed", getFailedJobs);
 adminRouter.get("/jobs/:jobId", getJobStatus);
+
+adminRouter.post("/benchmarks", requireApiKey({ role: "admin" }), postBenchmark);
+adminRouter.get("/benchmarks/:name", getBenchmarksByName);
+
+adminRouter.post("/db/vacuum", requireApiKey({ role: "admin" }), vacuumDatabase);
 
