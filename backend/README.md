@@ -124,6 +124,10 @@ connects to the `postgres` service.
 - `POST /api/v1/users/portfolios/batch` - batch-fetch portfolios for up to 50 addresses (`{ addresses: string[] }`).
 - `GET /api/v1/yields/:contractId/epochs` - list vault yield epochs.
 - `GET /api/v1/yields/:contractId/pending/:userAddress` - get pending yield.
+- `POST /api/v1/validate` - dry-run a request body against the schema of the route it is
+  destined for, without executing it. Takes `{ route, method, body }` and returns
+  `{ valid, errors }`, where `errors` is the list of Zod issues (`null` when the body is
+  valid). Returns 404 if no schema is registered for that route and method.
 
 ### Admin Endpoints
 
