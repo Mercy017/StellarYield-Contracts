@@ -80,7 +80,7 @@ export function responseSizeLimit(maxMb: number = config.maxResponseSizeMb) {
         const len = Buffer.isBuffer(chunk)
           ? chunk.length
           : typeof chunk === "string"
-            ? Buffer.byteLength(chunk, typeof encoding === "string" ? encoding : "utf8")
+            ? Buffer.byteLength(chunk, (typeof encoding === "string" ? encoding : "utf8") as BufferEncoding)
             : 0;
         bytesWritten += len;
       }
@@ -110,7 +110,7 @@ export function responseSizeLimit(maxMb: number = config.maxResponseSizeMb) {
         const len = Buffer.isBuffer(chunk)
           ? chunk.length
           : typeof chunk === "string"
-            ? Buffer.byteLength(chunk, typeof encoding === "string" ? encoding : "utf8")
+            ? Buffer.byteLength(chunk, (typeof encoding === "string" ? encoding : "utf8") as BufferEncoding)
             : 0;
         bytesWritten += len;
       }

@@ -111,7 +111,7 @@ export async function listVaults(req: Request, res: Response, next: NextFunction
 
 export async function getVaultCount(req: Request, res: Response, next: NextFunction) {
   try {
-    const total = await vaultService.countVaults(req.queryTimeoutMs);
+    const total = await vaultService.countVaults();
     setCacheHeaders(res);
     res.json({ total });
   } catch (err) {
@@ -311,7 +311,6 @@ export async function getVaultPositions(req: Request, res: Response, next: NextF
   try {
     const positions = await vaultService.getVaultPositions(
       String(req.params["contractId"]),
-      req.queryTimeoutMs,
     );
     res.json(positions);
   } catch (err) {
