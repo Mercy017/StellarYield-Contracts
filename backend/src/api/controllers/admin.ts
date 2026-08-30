@@ -1169,6 +1169,38 @@ export function streamIndexerProgress(req: Request, res: Response): void {
   sseManager.addIndexerClient(req, res);
 }
 
+/** GET /api/v1/admin/db/slow-queries — retrieve recent slow queries (#963) */
+export async function getSlowQueries(_req: Request, res: Response, next: NextFunction) {
+  try {
+    const rows = await query<{
+      id: number;
+      query_hash: string;
+      query_preview: string;
+      duration_ms: string | number;
+      route: string | null;
+      occurred_at: Date;
+    }>(
+      `SELECT id, query_hash, query_preview, duration_ms, route, occurred_at
+       FROM slow_query_log
+       ORDER BY occurred_at DESC
+       LIMIT 50`,
+    );
+
+    res.json(
+      rows.map((row) => ({
+        id: row.id,
+        query_hash: row.query_hash,
+        query_preview: row.query_preview,
+        duration_ms: typeof row.duration_ms === "string" ? parseFloat(row.duration_ms) : row.duration_ms,
+        route: row.route,
+        occurred_at: row.occurred_at,
+      })),
+    );
+  } catch (err) {
+    next(err);
+  }
+}
+
 // ── Issue #961: Benchmark reporting ──────────────────────────────────────────
 
 const benchmarkPostSchema = z.object({

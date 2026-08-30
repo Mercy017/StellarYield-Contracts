@@ -12,6 +12,7 @@ import {
   getArchivedVaults,
   getTotalSupplyConsistency,
   getDbStats,
+  getSlowQueries,
   getAdminFees,
   getAdminFeesDashboard,
   deleteUser,
@@ -54,6 +55,7 @@ adminRouter.get("/webhooks/:id/deliveries", getWebhookDeliveries);
 // Issue #1006: bulk webhook enable/disable
 adminRouter.post("/webhooks/bulk/toggle", requireApiKey({ role: "admin" }), bulkToggleWebhooks);
 adminRouter.get("/db/stats", getDbStats);
+adminRouter.get("/db/slow-queries", getSlowQueries);
 adminRouter.get("/fees", getAdminFees);
 adminRouter.get("/fees/dashboard", requireApiKey({ role: "admin" }), getAdminFeesDashboard);
 adminRouter.delete("/users/:address", requireApiKey({ role: "admin" }), deleteUser);
