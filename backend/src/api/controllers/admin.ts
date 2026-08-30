@@ -1265,7 +1265,7 @@ export async function getBenchmarksByName(req: Request, res: Response, next: Nex
         timestamp: r.timestamp,
         createdAt: r.created_at,
       })),
-    );
+    });
   } catch (err) {
     next(err);
   }
