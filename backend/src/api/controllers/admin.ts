@@ -252,8 +252,10 @@ export async function getApiKeys(_req: Request, res: Response, next: NextFunctio
       role: string;
       created_at: Date;
       expires_at: Date | null;
+      last_used_at: Date | null;
     }>(
-      "SELECT id, label, role, created_at, expires_at FROM api_keys ORDER BY created_at DESC",
+      `SELECT id, label, role, created_at, expires_at, last_used_at
+       FROM api_keys ORDER BY created_at DESC`,
     );
 
     res.json(
@@ -263,6 +265,8 @@ export async function getApiKeys(_req: Request, res: Response, next: NextFunctio
         role: row.role,
         createdAt: row.created_at,
         expiresAt: row.expires_at,
+        // null until the key authenticates a request for the first time (#933)
+        lastUsedAt: row.last_used_at ?? null,
       })),
     );
   } catch (err) {

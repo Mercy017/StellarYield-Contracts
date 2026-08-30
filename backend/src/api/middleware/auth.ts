@@ -10,6 +10,7 @@ interface ApiKey {
   role: string;
   label: string | null;
   expiresAt: Date | null;
+  lastUsedAt: Date | null;
 }
 
 interface AdminSessionClaims extends JwtPayload {
@@ -25,6 +26,25 @@ declare module "express-serve-static-core" {
 }
 
 const READ_ONLY_METHODS = new Set(["GET", "HEAD"]);
+
+/**
+ * Record that a key was just used for a successful authentication (#933).
+ *
+ * Deliberately not awaited: the timestamp is bookkeeping, so a slow or failing
+ * write must neither add latency to nor fail an otherwise valid request. The
+ * update is skipped when this key was already touched earlier in the same
+ * request, which happens on routes that layer a per-route role check on top of
+ * the router-level guard.
+ */
+function touchLastUsed(req: Request, apiKey: ApiKey): void {
+  if (req.apiKey?.id === apiKey.id) return;
+
+  void query("UPDATE api_keys SET last_used_at = NOW() WHERE id = $1", [apiKey.id]).catch(
+    (err: unknown) => {
+      logger.warn({ err, keyId: apiKey.id }, "Failed to update api_keys.last_used_at");
+    },
+  );
+}
 
 function getClientIp(req: Request): string {
   const forwarded = req.headers["x-forwarded-for"];
@@ -42,7 +62,8 @@ async function lookupApiKeyByPlaintext(plaintext: string): Promise<ApiKey | null
 
   try {
     const rows = (await query<ApiKey>(
-      'SELECT id, role, label, expires_at AS "expiresAt" FROM api_keys WHERE key_hash = $1',
+      `SELECT id, role, label, expires_at AS "expiresAt", last_used_at AS "lastUsedAt"
+       FROM api_keys WHERE key_hash = $1`,
       [keyHash],
     )) ?? [];
     return rows[0] ?? null;
@@ -66,6 +87,9 @@ function verifyAdminSession(token: string): ApiKey | null {
     role: String(claims.role),
     label: typeof claims.sub === "string" && claims.sub ? `session:${claims.sub}` : "admin-session",
     expiresAt,
+    // Session tokens are minted from an API key; the key itself was stamped at
+    // login, so the derived session carries no last-used timestamp of its own.
+    lastUsedAt: null,
   };
 }
 
@@ -260,6 +284,8 @@ export function requireApiKey(options?: { role?: string; minRole?: "readonly" | 
       path: req.path,
       method: req.method,
     });
+
+    touchLastUsed(req, apiKey);
 
     req.apiKey = apiKey;
     next();

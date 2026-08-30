@@ -185,6 +185,7 @@ erDiagram
         text label
         text role
         timestamptz expires_at
+        timestamptz last_used_at
         timestamptz created_at
     }
 
@@ -530,6 +531,7 @@ API keys for programmatic access.
 | `label` | `TEXT` | NOT NULL | — | Human-readable label |
 | `role` | `TEXT` | NOT NULL | — | Role: `admin` or `readonly` |
 | `expires_at` | `TIMESTAMPTZ` | YES | — | Key expiration timestamp |
+| `last_used_at` | `TIMESTAMPTZ` | YES | — | Last successful authentication with this key; `NULL` if never used (#933) |
 | `created_at` | `TIMESTAMPTZ` | YES | `NOW()` | Row creation timestamp |
 
 **Primary key:** `id`  
