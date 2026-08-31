@@ -1,3 +1,4 @@
+import compression from "compression";
 import cors from "cors";
 import express, { type Express } from "express";
 import helmet from "helmet";
@@ -50,6 +51,28 @@ export function createApp(): Express {
 
   app.use(helmet());
   app.use(pinoHttp({ logger }));
+
+  // Response compression (#948). Large list responses (vault lists, event logs)
+  // are verbose JSON; gzip/deflate cuts bandwidth for every client. Only
+  // payloads larger than 1 KB are compressed, and `Vary: Accept-Encoding` is
+  // set on every response so shared caches key on the client's encoding.
+  // SSE streams are never compressed — buffering them would defeat real-time
+  // delivery.
+  app.use((_req, res, next) => {
+    res.vary("Accept-Encoding");
+    next();
+  });
+  app.use(
+    compression({
+      threshold: 1024,
+      filter: (req, res) => {
+        const contentType = String(res.getHeader("Content-Type") ?? "");
+        if (contentType.includes("text/event-stream")) return false;
+        return compression.filter(req, res);
+      },
+    }),
+  );
+
   app.use(express.json({ limit: config.requestBodyLimit }));
 
   const origins = config.allowedOrigins;
