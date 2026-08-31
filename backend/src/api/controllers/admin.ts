@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import type { Request, Response, NextFunction } from "express";
+import Cursor from "pg-cursor";
+import { stringify } from "csv-stringify";
 import { z } from "zod";
 import { query, pool } from "../../db/index.js";
 import { config } from "../../config.js";
@@ -975,6 +978,89 @@ export async function getPositionsSnapshot(req: Request, res: Response, next: Ne
     );
   } catch (err) {
     next(err);
+  }
+}
+
+/**
+ * GET /api/v1/admin/positions/export.csv
+ *
+ * Streams every user vault position as CSV (#950). Instead of buffering the
+ * whole result set in memory (see #430), a pg-cursor is read in batches and
+ * piped through a csv-stringify transform straight to the response, so memory
+ * use stays flat regardless of row count and the first bytes reach the client
+ * as soon as the first batch is read.
+ */
+const POSITIONS_EXPORT_COLUMNS = [
+  "user_address",
+  "vault_contract_id",
+  "shares",
+  "deposited",
+  "last_claimed_epoch",
+  "updated_at",
+] as const;
+
+export async function exportPositionsCsv(_req: Request, res: Response, next: NextFunction) {
+  const client = await pool.connect();
+  const cursor = client.query(
+    new Cursor(
+      `SELECT uvp.user_address,
+              v.contract_id           AS vault_contract_id,
+              uvp.shares::text        AS shares,
+              uvp.deposited::text     AS deposited,
+              uvp.last_claimed_epoch,
+              uvp.updated_at
+         FROM user_vault_positions uvp
+         JOIN vaults v ON v.id = uvp.vault_id
+        ORDER BY uvp.id`,
+    ),
+  );
+
+  let released = false;
+  const cleanup = async (): Promise<void> => {
+    if (released) return;
+    released = true;
+    try {
+      await cursor.close();
+    } catch {
+      /* connection may already be gone */
+    }
+    client.release();
+  };
+
+  const stringifier = stringify({ header: true, columns: [...POSITIONS_EXPORT_COLUMNS] });
+
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="positions-export.csv"');
+  res.setHeader("Transfer-Encoding", "chunked");
+
+  stringifier.on("error", (err) => {
+    void cleanup();
+    res.destroy(err);
+  });
+  res.on("close", () => {
+    void cleanup();
+  });
+  stringifier.pipe(res);
+
+  try {
+    for (;;) {
+      const rows = await cursor.read(500);
+      if (rows.length === 0) break;
+      for (const row of rows) {
+        if (!stringifier.write(row)) {
+          await once(stringifier, "drain");
+        }
+      }
+    }
+    stringifier.end();
+    await cleanup();
+  } catch (err) {
+    await cleanup();
+    if (!res.headersSent) {
+      next(err);
+      return;
+    }
+    res.destroy(err as Error);
   }
 }
 

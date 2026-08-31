@@ -37,6 +37,14 @@ const envSchema = z.object({
     .refine((v) => /^postgres(ql)?:\/\/.+/.test(v), {
       message: "DATABASE_URL must be a valid PostgreSQL connection string (postgresql://...)",
     }),
+  // Optional read replica. SELECT-only (GET handler) queries are routed here to
+  // offload the primary. Falls back to DATABASE_URL when unset (#949).
+  DATABASE_READ_URL: z
+    .string()
+    .optional()
+    .refine((v) => v === undefined || /^postgres(ql)?:\/\/.+/.test(v), {
+      message: "DATABASE_READ_URL must be a valid PostgreSQL connection string (postgresql://...)",
+    }),
   INDEXER_START_LEDGER: z
     .string()
     .default("0")
@@ -106,6 +114,13 @@ const envSchema = z.object({
     .default("500")
     .transform((v) => parseInt(v, 10))
     .pipe(z.number().int().min(1)),
+  // Connections to establish upfront once the pool is validated, so cold-start
+  // requests never wait on connection setup under load (#951).
+  POOL_WARMUP_CONNECTIONS: z
+    .string()
+    .default("3")
+    .transform((v) => parseInt(v, 10))
+    .pipe(z.number().int().min(0)),
   SLOW_QUERY_THRESHOLD_MS: z
     .string()
     .optional()
@@ -246,11 +261,13 @@ export const config = {
 
   db: {
     url: parsed.data.DATABASE_URL,
+    readUrl: parsed.data.DATABASE_READ_URL ?? null,
     poolMin: parsed.data.DB_POOL_MIN,
     poolMax: parsed.data.DB_POOL_MAX,
     idleTimeoutMs: parsed.data.DB_IDLE_TIMEOUT_MS,
     queryTimeoutMs: parsed.data.DB_QUERY_TIMEOUT_MS,
     slowQueryMs: parsed.data.SLOW_QUERY_THRESHOLD_MS ?? parsed.data.DB_SLOW_QUERY_MS,
+    poolWarmupConnections: parsed.data.POOL_WARMUP_CONNECTIONS,
   },
   maxResponseSizeMb: parsed.data.MAX_RESPONSE_SIZE_MB,
 

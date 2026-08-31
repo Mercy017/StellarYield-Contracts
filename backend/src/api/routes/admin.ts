@@ -24,6 +24,7 @@ import {
   clearUserAml,
   getFlaggedUsers,
   getPositionsSnapshot,
+  exportPositionsCsv,
   streamIndexerProgress,
   getVaultComplianceStatus,
   getUserComplianceSummary,
@@ -83,6 +84,8 @@ adminRouter.post("/users/:address/aml-flag", flagUserAml);
 adminRouter.post("/users/:address/aml-clear", clearUserAml);
 adminRouter.get("/compliance/flagged-users", getFlaggedUsers);
 adminRouter.get("/compliance/positions-snapshot", getPositionsSnapshot);
+// Issue #950: streamed CSV export of all user vault positions
+adminRouter.get("/positions/export.csv", exportPositionsCsv);
 
 // Issue #803: Vault compliance status
 adminRouter.get("/compliance/vaults/:contractId/status", getVaultComplianceStatus);
