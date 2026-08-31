@@ -1,13 +1,21 @@
 import { createHash } from "crypto";
 import type { Request, Response, NextFunction } from "express";
+import jwt, { type JwtPayload, TokenExpiredError } from "jsonwebtoken";
 import { query } from "../../db/index.js";
 import { logger } from "../../logger.js";
+import { config } from "../../config.js";
 
 interface ApiKey {
   id: number;
   role: string;
   label: string | null;
   expiresAt: Date | null;
+}
+
+interface AdminSessionClaims extends JwtPayload {
+  role?: string;
+  type?: string;
+  sub?: string;
 }
 
 declare module "express-serve-static-core" {
@@ -29,6 +37,74 @@ function getClientIp(req: Request): string {
   return req.socket?.remoteAddress ?? "unknown";
 }
 
+async function lookupApiKeyByPlaintext(plaintext: string): Promise<ApiKey | null> {
+  const keyHash = createHash("sha256").update(plaintext).digest("hex");
+
+  try {
+    const rows = (await query<ApiKey>(
+      'SELECT id, role, label, expires_at AS "expiresAt" FROM api_keys WHERE key_hash = $1',
+      [keyHash],
+    )) ?? [];
+    return rows[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function verifyAdminSession(token: string): ApiKey | null {
+  const secret = config.adminJwtSecret;
+  const claims = jwt.verify(token, secret) as AdminSessionClaims;
+
+  if (claims.type !== "admin_session" || !claims.role) {
+    return null;
+  }
+
+  const expiresAt = typeof claims.exp === "number" ? new Date(claims.exp * 1000) : null;
+
+  return {
+    id: Number(claims.sub ?? -1) || -1,
+    role: String(claims.role),
+    label: typeof claims.sub === "string" && claims.sub ? `session:${claims.sub}` : "admin-session",
+    expiresAt,
+  };
+}
+
+export function createAdminSessionToken(apiKey: Pick<ApiKey, "id" | "role" | "label">): string {
+  const secret = config.adminJwtSecret;
+  const expiresInMinutes = config.adminSessionExpiryMinutes;
+
+  return jwt.sign(
+    {
+      sub: String(apiKey.id),
+      role: apiKey.role,
+      type: "admin_session",
+      label: apiKey.label ?? null,
+    },
+    secret,
+    { expiresIn: `${expiresInMinutes}m` },
+  );
+}
+
+export function refreshAdminSessionToken(token: string): string {
+  const secret = config.adminJwtSecret;
+  const claims = jwt.verify(token, secret) as AdminSessionClaims;
+
+  if (claims.type !== "admin_session" || !claims.role) {
+    throw new Error("Invalid session token");
+  }
+
+  return jwt.sign(
+    {
+      sub: claims.sub ?? "admin-session",
+      role: claims.role,
+      type: "admin_session",
+      label: claims.label ?? null,
+    },
+    secret,
+    { expiresIn: `${config.adminSessionExpiryMinutes}m` },
+  );
+}
+
 export function requireApiKey(options?: { role?: string; minRole?: "readonly" | "admin" }) {
   return async (req: Request, res: Response, next: NextFunction) => {
     const ip = getClientIp(req);
@@ -38,20 +114,87 @@ export function requireApiKey(options?: { role?: string; minRole?: "readonly" | 
       return;
     }
 
-    const plaintext = authHeader.slice(7);
-    const keyHash = createHash("sha256").update(plaintext).digest("hex");
+    const token = authHeader.slice(7);
 
-    let rows: ApiKey[] = [];
     try {
-      rows = (await query<ApiKey>(
-        'SELECT id, role, label, expires_at AS "expiresAt" FROM api_keys WHERE key_hash = $1',
-        [keyHash],
-      )) ?? [];
-    } catch {
-      rows = [];
+      const sessionApiKey = verifyAdminSession(token);
+      if (sessionApiKey) {
+        if (sessionApiKey.expiresAt && sessionApiKey.expiresAt.getTime() <= Date.now()) {
+          logger.info({
+            event: "auth_attempt",
+            success: false,
+            ip,
+            keyLabel: sessionApiKey.label,
+            path: req.path,
+            method: req.method,
+            reason: "expired",
+          });
+          res.status(401).json({ error: "Unauthorized", message: "JWT expired" });
+          return;
+        }
+
+        if (options?.role && sessionApiKey.role !== options.role) {
+          logger.info({
+            event: "auth_attempt",
+            success: false,
+            ip,
+            keyLabel: sessionApiKey.label,
+            path: req.path,
+            method: req.method,
+            reason: "insufficient_permissions",
+          });
+          res.status(403).json({ error: "Forbidden", message: "Insufficient permissions" });
+          return;
+        }
+
+        if (options?.minRole === "readonly" && sessionApiKey.role !== "admin") {
+          if (sessionApiKey.role !== "readonly" || !READ_ONLY_METHODS.has(req.method)) {
+            logger.info({
+              event: "auth_attempt",
+              success: false,
+              ip,
+              keyLabel: sessionApiKey.label,
+              path: req.path,
+              method: req.method,
+              reason: "insufficient_permissions",
+            });
+            res.status(403).json({ error: "Forbidden", message: "Insufficient permissions" });
+            return;
+          }
+        }
+
+        logger.info({
+          event: "auth_attempt",
+          success: true,
+          ip,
+          keyLabel: sessionApiKey.label,
+          path: req.path,
+          method: req.method,
+        });
+
+        req.apiKey = sessionApiKey;
+        next();
+        return;
+      }
+    } catch (error) {
+      if (error instanceof TokenExpiredError) {
+        logger.info({
+          event: "auth_attempt",
+          success: false,
+          ip,
+          keyLabel: null,
+          path: req.path,
+          method: req.method,
+          reason: "expired",
+        });
+        res.status(401).json({ error: "Unauthorized", message: "JWT expired" });
+        return;
+      }
     }
 
-    if (!rows || rows.length === 0) {
+    const apiKey = await lookupApiKeyByPlaintext(token);
+
+    if (!apiKey) {
       logger.info({
         event: "auth_attempt",
         success: false,
@@ -64,8 +207,6 @@ export function requireApiKey(options?: { role?: string; minRole?: "readonly" | 
       res.status(403).json({ error: "Forbidden", message: "Invalid API key" });
       return;
     }
-
-    const apiKey = rows[0];
 
     if (apiKey.expiresAt && apiKey.expiresAt.getTime() <= Date.now()) {
       logger.info({

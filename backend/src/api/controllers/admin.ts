@@ -1,11 +1,14 @@
 import { createHash } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
+import { z } from "zod";
 import { query, pool } from "../../db/index.js";
+import { config } from "../../config.js";
+import { seed } from "../../db/seed.js";
 import { indexer } from "../../services/indexerSingleton.js";
 import { jobQueue } from "../../services/jobQueue.js";
 import { sseManager } from "../../services/sseManager.js";
 import { logger } from "../../logger.js";
-import { z } from "zod";
+import { createAdminSessionToken, refreshAdminSessionToken } from "../middleware/auth.js";
 
 const stellarAddressSchema = z.string().length(56).regex(/^G[A-Z2-7]{55}$/);
 const contractAddressSchema = z.string().length(56).regex(/^C[A-Z2-7]{55}$/);
@@ -36,6 +39,113 @@ async function logAdminAudit(req: Request, action: string, target: string): Prom
      VALUES ($1, $2, $3, $4, $5, NOW())`,
     [req.apiKey?.label ?? null, action, target, getClientIp(req), getRequestBodyHash(req.body)],
   );
+}
+
+async function findApiKeyByValue(plaintext: string): Promise<{ id: number; role: string; label: string | null; expiresAt: Date | null } | null> {
+  const keyHash = createHash("sha256").update(plaintext).digest("hex");
+  const rows = await query<{ id: number; role: string; label: string | null; expires_at: Date | null }>(
+    'SELECT id, role, label, expires_at FROM api_keys WHERE key_hash = $1',
+    [keyHash],
+  ).catch(() => []);
+
+  if (rows.length === 0) return null;
+  const row = rows[0];
+  return {
+    id: row.id,
+    role: row.role,
+    label: row.label,
+    expiresAt: row.expires_at,
+  };
+}
+
+export async function createAdminSession(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = z.object({ apiKey: z.string().min(1, "apiKey is required") }).safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "BadRequest", message: "Invalid request body" });
+      return;
+    }
+
+    const apiKey = await findApiKeyByValue(parsed.data.apiKey);
+    if (!apiKey) {
+      res.status(401).json({ error: "Unauthorized", message: "Invalid API key" });
+      return;
+    }
+
+    if (apiKey.role !== "admin") {
+      res.status(403).json({ error: "Forbidden", message: "Admin API key required" });
+      return;
+    }
+
+    if (apiKey.expiresAt && apiKey.expiresAt.getTime() <= Date.now()) {
+      res.status(401).json({ error: "Unauthorized", message: "API key has expired" });
+      return;
+    }
+
+    const token = createAdminSessionToken(apiKey);
+    res.json({ token, expiresInMinutes: config.adminSessionExpiryMinutes });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function refreshAdminSession(req: Request, res: Response, next: NextFunction) {
+  try {
+    const authHeader = req.headers.authorization ?? "";
+    if (!authHeader.startsWith("Bearer ")) {
+      res.status(401).json({ error: "Unauthorized", message: "Missing JWT" });
+      return;
+    }
+
+    const token = authHeader.slice("Bearer ".length).trim();
+    const refreshedToken = refreshAdminSessionToken(token);
+    res.json({ token: refreshedToken, expiresInMinutes: config.adminSessionExpiryMinutes });
+  } catch {
+    res.status(401).json({ error: "Unauthorized", message: "Invalid or expired JWT" });
+  }
+}
+
+export async function getSecurityHeadersAudit(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { default: supertest } = await import("supertest");
+    const healthResponse = await supertest(req.app).get("/health");
+
+    const headerNames = [
+      "x-content-type-options",
+      "x-frame-options",
+      "content-security-policy",
+      "strict-transport-security",
+    ];
+
+    const audit = headerNames.map((header) => {
+      const value = healthResponse.headers[header] ?? null;
+      return {
+        header,
+        value,
+        required: true,
+        present: Boolean(value),
+      };
+    });
+
+    res.json(audit);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function resetSandboxData(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!config.enableSandboxReset) {
+      res.status(404).json({ error: "NotFound", message: "Sandbox reset is disabled" });
+      return;
+    }
+
+    await query("TRUNCATE TABLE indexed_events, yield_snapshots, vault_tvl_snapshots RESTART IDENTITY CASCADE");
+    await seed();
+    res.json({ success: true, tablesReset: ["indexed_events", "yield_snapshots", "vault_tvl_snapshots"] });
+  } catch (err) {
+    next(err);
+  }
 }
 
 export async function getAdminStats(_req: Request, res: Response, next: NextFunction) {
