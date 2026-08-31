@@ -363,6 +363,8 @@ describe("Admin Controller", () => {
 
       // auth middleware: api_keys lookup → match the hashed key
       mockQuery.mockResolvedValueOnce([{ id: 1, role: "admin", label: "test" }]);
+      // auth middleware: last_used_at stamp for the authenticated key (#933)
+      mockQuery.mockResolvedValueOnce([]);
       // getAdminStats: vaultCount
       mockQuery.mockResolvedValueOnce([{ count: "3" }]);
       // getAdminStats: userCount

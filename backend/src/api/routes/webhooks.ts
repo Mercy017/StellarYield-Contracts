@@ -15,7 +15,7 @@ import { KNOWN_EVENTS } from "../../services/notificationEvents.js";
 
 const KNOWN_CHANNELS = ["webhook", "email", "slack"] as const;
 
-const createWebhookSchema = z.object({
+export const createWebhookSchema = z.object({
   url: z.string().min(1, "URL or email is required"),
   events: z
     .array(z.enum(KNOWN_EVENTS))
@@ -34,7 +34,7 @@ const webhookParamsSchema = z.object({
 });
 
 /** Schema for POST /webhooks/verify-signature (#664) */
-const verifySignatureSchema = z.object({
+export const verifySignatureSchema = z.object({
   payload: z.string(),
   signature: z.string(),
   secret: z.string(),
