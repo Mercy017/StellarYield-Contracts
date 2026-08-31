@@ -144,6 +144,7 @@ export async function getUserPendingYield(req: Request, res: Response, next: Nex
     const result = await yieldService.getUserPendingYield(
       String(req.params["contractId"]),
       String(req.params["userAddress"]),
+      req.queryTimeoutMs,
     );
     res.json(result);
   } catch (err) {
@@ -153,7 +154,9 @@ export async function getUserPendingYield(req: Request, res: Response, next: Nex
 
 export async function getYieldSummary(req: Request, res: Response, next: NextFunction) {
   try {
-    const summary = await yieldService.getYieldSummary(String(req.params["contractId"]));
+    const summary = await yieldService.getYieldSummary(
+      String(req.params["contractId"]),
+    );
     res.json(summary);
   } catch (err) {
     next(err);
@@ -309,3 +312,85 @@ export async function getApyTrend(
     next(err);
   }
 }
+
+// ── Rolling APY calculation (#978) ────────────────────────────────────────────
+export async function getRollingApy(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const contractId = String(req.params["contractId"]);
+    const result = await yieldService.getRollingApy(contractId);
+    if (!result) {
+      res.status(404).json({ error: "NotFound", message: "Vault not found" });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── APY history time-series (#979) ────────────────────────────────────────────
+export async function getApyHistory(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const contractId = String(req.params["contractId"]);
+    const fromParam = req.query.from as string | undefined;
+    const toParam = req.query.to as string | undefined;
+
+    let fromDate: Date | undefined;
+    let toDate: Date | undefined;
+
+    if (fromParam) {
+      fromDate = new Date(fromParam);
+      if (isNaN(fromDate.getTime())) {
+        res.status(400).json({ error: "BadRequest", message: "Invalid from date format" });
+        return;
+      }
+    }
+
+    if (toParam) {
+      toDate = new Date(toParam);
+      if (isNaN(toDate.getTime())) {
+        res.status(400).json({ error: "BadRequest", message: "Invalid to date format" });
+        return;
+      }
+    }
+
+    const result = await yieldService.getApyHistory(contractId, fromDate, toDate);
+    if (!result) {
+      res.status(404).json({ error: "NotFound", message: "Vault not found" });
+      return;
+    }
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+// ── Yield volatility metric per vault (#982) ──────────────────────────────────
+export async function getYieldVolatility(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  try {
+    const contractId = String(req.params["contractId"]);
+    const exists = await yieldService.vaultExists(contractId);
+    if (!exists) {
+      res.status(404).json({ error: "NotFound", message: "Vault not found" });
+      return;
+    }
+
+    const result = await yieldService.getYieldVolatility(contractId);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+

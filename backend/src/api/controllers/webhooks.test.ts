@@ -70,10 +70,12 @@ describe("Webhook Controller", () => {
         url: "https://example.com/hook",
         events: ["deposit"],
         active: true,
+        channel: "webhook",
         consecutiveFailures: 0,
         channel: "webhook",
         priority: 0,
         fallbackChannel: null,
+        maxPerHour: null,
         createdAt: row.created_at,
       });
     });
@@ -92,7 +94,7 @@ describe("Webhook Controller", () => {
 
       expect(query).toHaveBeenCalledWith(
         expect.stringContaining("INSERT INTO webhooks"),
-        ["https://example.com/hook", ["deposit"], null, "webhook", 0],
+        ["https://example.com/hook", ["deposit"], null, "webhook", 0, null],
       );
     });
 

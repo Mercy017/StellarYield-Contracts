@@ -403,6 +403,119 @@ function registerPaths(): void {
     },
   });
 
+  const notificationPreferenceSchema = z.object({
+    eventType: z.string(),
+    channel: z.string(),
+    enabled: z.boolean(),
+    vaultContractId: z.string().nullable(),
+    updatedAt: z.string(),
+  });
+
+  registry.registerPath({
+    method: "get",
+    path: "/api/v1/users/{address}/notification-preferences",
+    summary: "Get the user's notification preferences",
+    tags: ["Users"],
+    parameters: [{ name: "address", in: "path", required: true, schema: { type: "string" } }],
+    responses: {
+      200: {
+        description: "All notification preference rows for the user",
+        content: {
+          "application/json": {
+            schema: z.object({ preferences: z.array(notificationPreferenceSchema) }),
+          },
+        },
+      },
+    },
+  });
+
+  registry.registerPath({
+    method: "put",
+    path: "/api/v1/users/{address}/notification-preferences",
+    summary: "Upsert the user's notification preferences",
+    tags: ["Users"],
+    parameters: [{ name: "address", in: "path", required: true, schema: { type: "string" } }],
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.array(
+              z.object({
+                eventType: z.string(),
+                channel: z.string(),
+                enabled: z.boolean(),
+                vaultContractId: z.string().nullable().optional(),
+              }),
+            ),
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "The updated preference rows",
+        content: {
+          "application/json": {
+            schema: z.object({ preferences: z.array(notificationPreferenceSchema) }),
+          },
+        },
+      },
+      400: { description: "Unknown event type or malformed body", content: { "application/json": { schema: errorResponseSchema } } },
+    },
+  });
+
+  const vaultSubscriptionSchema = z.object({
+    contractId: z.string(),
+    events: z.array(z.string()),
+  });
+
+  registry.registerPath({
+    method: "get",
+    path: "/api/v1/users/{address}/subscriptions",
+    summary: "List the user's per-vault notification subscriptions",
+    tags: ["Users"],
+    parameters: [{ name: "address", in: "path", required: true, schema: { type: "string" } }],
+    responses: {
+      200: {
+        description: "Active subscriptions grouped by vault",
+        content: {
+          "application/json": {
+            schema: z.object({ subscriptions: z.array(vaultSubscriptionSchema) }),
+          },
+        },
+      },
+    },
+  });
+
+  registry.registerPath({
+    method: "post",
+    path: "/api/v1/users/{address}/subscriptions",
+    summary: "Subscribe the user to events for a single vault",
+    tags: ["Users"],
+    parameters: [{ name: "address", in: "path", required: true, schema: { type: "string" } }],
+    request: {
+      body: { content: { "application/json": { schema: vaultSubscriptionSchema } } },
+    },
+    responses: {
+      201: { description: "Subscription created", content: { "application/json": { schema: vaultSubscriptionSchema } } },
+      400: { description: "Unknown event type or malformed body", content: { "application/json": { schema: errorResponseSchema } } },
+    },
+  });
+
+  registry.registerPath({
+    method: "delete",
+    path: "/api/v1/users/{address}/subscriptions/{contractId}",
+    summary: "Remove all of the user's subscriptions for a vault",
+    tags: ["Users"],
+    parameters: [
+      { name: "address", in: "path", required: true, schema: { type: "string" } },
+      { name: "contractId", in: "path", required: true, schema: { type: "string" } },
+    ],
+    responses: {
+      204: { description: "Subscriptions removed" },
+    },
+  });
+
   registry.registerPath({
     method: "get",
     path: "/api/v1/yields",
@@ -493,9 +606,9 @@ function registerPaths(): void {
     path: "/api/v1/webhooks",
     summary: "Create webhook (requires API key)",
     tags: ["Webhooks"],
-    request: { body: { content: { "application/json": { schema: z.object({ url: z.string(), events: z.array(z.string()), secret: z.string().optional(), priority: z.number().int().optional() }) } } } },
+    request: { body: { content: { "application/json": { schema: z.object({ url: z.string(), events: z.array(z.string()), secret: z.string().optional(), priority: z.number().int().optional(), maxPerHour: z.number().int().positive().nullable().optional() }) } } } },
     responses: {
-      201: { description: "Webhook created", content: { "application/json": { schema: z.object({ id: z.number(), url: z.string(), events: z.array(z.string()), active: z.boolean(), createdAt: z.string(), priority: z.number(), fallbackChannel: z.number().nullable() }) } } },
+      201: { description: "Webhook created", content: { "application/json": { schema: z.object({ id: z.number(), url: z.string(), events: z.array(z.string()), active: z.boolean(), createdAt: z.string(), priority: z.number(), fallbackChannel: z.number().nullable(), maxPerHour: z.number().nullable() }) } } },
     },
   });
 
@@ -505,7 +618,7 @@ function registerPaths(): void {
     summary: "List webhooks (requires API key), ordered by priority ascending",
     tags: ["Webhooks"],
     responses: {
-      200: { description: "List of webhooks", content: { "application/json": { schema: z.array(z.object({ id: z.number(), url: z.string(), events: z.array(z.string()), active: z.boolean(), createdAt: z.string(), priority: z.number(), fallbackChannel: z.number().nullable() })) } } },
+      200: { description: "List of webhooks", content: { "application/json": { schema: z.array(z.object({ id: z.number(), url: z.string(), events: z.array(z.string()), active: z.boolean(), createdAt: z.string(), priority: z.number(), fallbackChannel: z.number().nullable(), maxPerHour: z.number().nullable() })) } } },
     },
   });
 
@@ -591,6 +704,50 @@ function registerPaths(): void {
             ),
           },
         },
+      },
+    },
+  });
+
+  registry.registerPath({
+    method: "post",
+    path: "/api/v1/validate",
+    summary: "Validate a request body against a route's schema without executing it",
+    description:
+      "Dry run: performs exactly the validation the target route performs and nothing else. "
+      + "Returns 404 when no schema is registered for the given route and method.",
+    tags: ["Validation"],
+    request: {
+      body: {
+        content: {
+          "application/json": {
+            schema: z.object({
+              route: z.string().openapi({ example: "/api/v1/webhooks" }),
+              method: z.string().openapi({ example: "POST" }),
+              body: z.unknown(),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Validation result; `errors` is null when the body is valid",
+        content: {
+          "application/json": {
+            schema: z.object({
+              valid: z.boolean(),
+              errors: z.array(z.record(z.unknown())).nullable(),
+            }),
+          },
+        },
+      },
+      400: {
+        description: "Malformed dry-run request (missing route, method or body)",
+        content: { "application/json": { schema: errorResponseSchema } },
+      },
+      404: {
+        description: "No request body schema is registered for that route and method",
+        content: { "application/json": { schema: errorResponseSchema } },
       },
     },
   });

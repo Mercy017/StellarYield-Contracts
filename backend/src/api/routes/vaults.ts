@@ -10,6 +10,7 @@ import {
   getVaultLiveTotalAssets,
   getRedemptionQueue,
   getVaultSnapshot,
+  getVaultMetadataHistory,
   getVaultTopHolders,
   getVaultHolders,
   getVaultHolderCount,
@@ -35,6 +36,7 @@ import {
   getCooperatorFees,
   streamVaultEvents,
   getVaultsBulkStatus,
+  validateVaultMetadata,
 } from "../controllers/vaults.js";
 import {
   translateSimulationError,
@@ -177,6 +179,12 @@ const maturingSoonQuerySchema = z.object({
 // Detail endpoint query params: allow `fields` (comma-separated) and `embed` (comma-separated)
 const vaultDetailQuerySchema = z.object({ fields: z.string().optional(), embed: z.string().optional() });
 
+// Metadata history endpoint (#973): page + pageSize (capped at 100)
+const metadataHistoryQuerySchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).default(20).transform((value) => Math.min(value, 100)),
+});
+
 export const vaultsRouter = Router();
 
 vaultsRouter.get("/categories", listCategories);
@@ -194,17 +202,26 @@ vaultsRouter.get("/maturing-soon", validateQuery(maturingSoonQuerySchema), getMa
 vaultsRouter.get("/fully-funded", getFullyFundedVaults);
 vaultsRouter.get("/stream", streamVaultEvents);
 // Issue #998: Bulk vault status query (placed before /:contractId routes)
-const bulkStatusBodySchema = z.object({
+export const bulkStatusBodySchema = z.object({
   contractIds: z.array(contractAddressSchema).min(1).max(100),
 });
 vaultsRouter.post("/bulk/status", validateBody(bulkStatusBodySchema), getVaultsBulkStatus);
 // Issue #1015: Simulation error translation (placed before /:contractId routes)
+export const translateErrorBodySchema = z.object({ errorCode: z.number().int() });
 vaultsRouter.post(
   "/simulate/translate-error",
   simulateLimiter,
-  validateBody(z.object({ errorCode: z.number().int() })),
+  validateBody(translateErrorBodySchema),
   translateSimulationError,
 );
+// Issue #976: Vault metadata validation
+export const metadataValidationSchema = z.object({
+  name: z.string().optional(),
+  documentUri: z.string().optional(),
+  logoUri: z.string().optional(),
+  description: z.string().optional(),
+});
+vaultsRouter.post("/metadata/validate", validateBody(metadataValidationSchema), validateVaultMetadata);
 vaultsRouter.get("/factory/:factoryId", validateParams(vaultFactoryParamsSchema), listVaultsByFactory);
 // Issue #1012: Funding progress simulation
 vaultsRouter.get(
@@ -244,6 +261,13 @@ vaultsRouter.get(
 );
 // Get vault snapshot: GET /api/v1/vaults/:contractId/snapshot
 vaultsRouter.get("/:contractId/snapshot", validateParams(vaultParamsSchema), getVaultSnapshot);
+// Metadata change history: GET /api/v1/vaults/:contractId/metadata-history (#973)
+vaultsRouter.get(
+  "/:contractId/metadata-history",
+  validateParams(vaultParamsSchema),
+  validateQuery(metadataHistoryQuerySchema),
+  getVaultMetadataHistory,
+);
 // Get vault TVL history: GET /api/v1/vaults/:contractId/tvl-history
 vaultsRouter.get("/:contractId/tvl-history", validateParams(vaultParamsSchema), getVaultTvlHistory);
 // Get compound projection: GET /api/v1/vaults/:contractId/compound-projection?shares=<amount>&epochs=<n>

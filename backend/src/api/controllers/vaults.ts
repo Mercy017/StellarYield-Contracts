@@ -59,7 +59,6 @@ export async function listVaults(req: Request, res: Response, next: NextFunction
       fields?: string;
     };
 
-    // Parse and validate `filter` if provided
     let parsedFilter: any | undefined;
     if (typeof filter === "string" && filter.trim() !== "") {
       try {
@@ -110,7 +109,7 @@ export async function listVaults(req: Request, res: Response, next: NextFunction
   }
 }
 
-export async function getVaultCount(_req: Request, res: Response, next: NextFunction) {
+export async function getVaultCount(req: Request, res: Response, next: NextFunction) {
   try {
     const total = await vaultService.countVaults();
     setCacheHeaders(res);
@@ -143,7 +142,10 @@ export async function getVaultAggregates(req: Request, res: Response, next: Next
 
 export async function listVaultsByFactory(req: Request, res: Response, next: NextFunction) {
   try {
-    const vaults = await vaultService.listVaultsByFactory(String(req.params["factoryId"]));
+    const vaults = await vaultService.listVaultsByFactory(
+      String(req.params["factoryId"]),
+      req.queryTimeoutMs,
+    );
     setCacheHeaders(res);
     res.json(vaults);
   } catch (err) {
@@ -307,7 +309,9 @@ export async function getVaultLiveTotalAssets(req: Request, res: Response, next:
 
 export async function getVaultPositions(req: Request, res: Response, next: NextFunction) {
   try {
-    const positions = await vaultService.getVaultPositions(String(req.params["contractId"]));
+    const positions = await vaultService.getVaultPositions(
+      String(req.params["contractId"]),
+    );
     res.json(positions);
   } catch (err) {
     next(err);
@@ -491,6 +495,73 @@ export async function getVaultSnapshot(req: Request, res: Response, next: NextFu
 }
 
 /**
+ * GET /api/v1/vaults/:contractId/metadata-history?page=&pageSize=
+ *
+ * Returns the chronological log of vault metadata changes sourced from
+ * vault_metadata_history, most recent first. Paginated with page + pageSize
+ * (max 100). Returns { data: [], total: 0, page, pageSize } for a vault with
+ * no metadata updates. (#973)
+ */
+export async function getVaultMetadataHistory(req: Request, res: Response, next: NextFunction) {
+  try {
+    const parsed = contractAddressSchema.safeParse(req.params["contractId"]);
+    if (!parsed.success) {
+      res.status(400).json({ error: "BadRequest", message: "Invalid contractId format" });
+      return;
+    }
+    const contractId = parsed.data;
+
+    const page = Math.max(1, parseInt(String(req.query["page"] ?? "1"), 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(String(req.query["pageSize"] ?? "20"), 10) || 20));
+    const offset = (page - 1) * pageSize;
+
+    const vaultRow = await query<{ id: number }>(
+      "SELECT id FROM vaults WHERE contract_id = $1",
+      [contractId],
+    );
+    if (vaultRow.length === 0) {
+      res.status(404).json({ error: "NotFound", message: "Vault not found" });
+      return;
+    }
+    const vaultId = vaultRow[0].id;
+
+    const rows = await query<{
+      field: string;
+      old_value: string | null;
+      new_value: string | null;
+      changed_by: string | null;
+      recorded_at: Date;
+    }>(
+      `SELECT field, old_value, new_value, changed_by, recorded_at
+       FROM vault_metadata_history
+       WHERE vault_id = $1
+       ORDER BY recorded_at DESC
+       LIMIT $2 OFFSET $3`,
+      [vaultId, pageSize, offset],
+    );
+
+    const countRows = await query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM vault_metadata_history WHERE vault_id = $1",
+      [vaultId],
+    );
+    const total = parseInt(countRows[0]?.count ?? "0", 10);
+
+    const data = rows.map((r) => ({
+      field: r.field,
+      oldValue: r.old_value,
+      newValue: r.new_value,
+      changedBy: r.changed_by,
+      recordedAt: r.recorded_at.toISOString(),
+    }));
+
+    setCacheHeaders(res);
+    res.json({ data, total, page, pageSize });
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
  * GET /api/v1/vaults/:contractId/holders/top?n=10
  *
  * Returns the top N shareholders (max 20) with rank, userAddress, shares, sharePercent.
@@ -640,6 +711,62 @@ export async function exportVaultHoldersCsv(req: Request, res: Response, next: N
     res.set("Content-Type", "text/csv");
     res.set("Content-Disposition", `attachment; filename="holders-${contractId}.csv"`);
     res.send(csv);
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/v1/vaults/metadata/validate
+ *
+ * Validates proposed vault metadata before on-chain submission.
+ * Accepts { name?: string; documentUri?: string; logoUri?: string; description?: string }
+ * Returns { valid: boolean; errors: { field: string; message: string }[] }
+ */
+export async function validateVaultMetadata(req: Request, res: Response, next: NextFunction) {
+  try {
+    const { name, documentUri, logoUri, description } = req.body as {
+      name?: string;
+      documentUri?: string;
+      logoUri?: string;
+      description?: string;
+    };
+
+    const errors: { field: string; message: string }[] = [];
+
+    // Validate name: minimum 3 characters
+    if (name !== undefined && name !== null && name !== "") {
+      if (typeof name !== "string" || name.length < 3) {
+        errors.push({ field: "name", message: "name must be at least 3 characters" });
+      }
+    }
+
+    // Validate URIs: must be valid HTTPS URLs
+    const httpsUrlPattern = /^https:\/\/.+/i;
+    
+    if (documentUri !== undefined && documentUri !== null && documentUri !== "") {
+      if (typeof documentUri !== "string" || !httpsUrlPattern.test(documentUri)) {
+        errors.push({ field: "documentUri", message: "documentUri must be a valid HTTPS URL" });
+      }
+    }
+
+    if (logoUri !== undefined && logoUri !== null && logoUri !== "") {
+      if (typeof logoUri !== "string" || !httpsUrlPattern.test(logoUri)) {
+        errors.push({ field: "logoUri", message: "logoUri must be a valid HTTPS URL" });
+      }
+    }
+
+    // Validate description: maximum 1000 characters
+    if (description !== undefined && description !== null && description !== "") {
+      if (typeof description !== "string" || description.length > 1000) {
+        errors.push({ field: "description", message: "description must not exceed 1000 characters" });
+      }
+    }
+
+    res.json({
+      valid: errors.length === 0,
+      errors,
+    });
   } catch (err) {
     next(err);
   }

@@ -14,6 +14,7 @@ interface WebhookRow {
   channel: string | null;
   priority: number;
   fallback_channel: number | null;
+  max_per_hour: number | null;
 }
 
 function formatWebhook(w: WebhookRow) {
@@ -27,18 +28,31 @@ function formatWebhook(w: WebhookRow) {
     channel: w.channel ?? "webhook",
     priority: w.priority ?? 0,
     fallbackChannel: w.fallback_channel ?? null,
+    maxPerHour: w.max_per_hour ?? null,
   };
 }
 
 export async function createWebhook(req: Request, res: Response, next: NextFunction) {
   try {
-    const { url, events, secret, channel, priority } = req.body as {
+    const { url, events, secret, channel, priority, maxPerHour } = req.body as {
       url: string;
       events: string[];
       secret?: string;
       channel?: string;
       priority?: number;
+      maxPerHour?: number | null;
     };
+
+    if (
+      maxPerHour != null &&
+      (!Number.isInteger(maxPerHour) || maxPerHour <= 0)
+    ) {
+      res.status(400).json({
+        error: "InvalidMaxPerHour",
+        message: "maxPerHour must be a positive integer or null",
+      });
+      return;
+    }
 
     const webhookChannel = channel ?? "webhook";
 
@@ -58,10 +72,10 @@ export async function createWebhook(req: Request, res: Response, next: NextFunct
     }
 
     const rows = await query<WebhookRow>(
-      `INSERT INTO webhooks (url, events, secret, channel, priority)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, url, events, active, created_at, consecutive_failures, channel, priority, fallback_channel`,
-      [url, events, secret ?? null, webhookChannel, priority ?? 0],
+      `INSERT INTO webhooks (url, events, secret, channel, priority, max_per_hour)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, url, events, active, created_at, consecutive_failures, channel, priority, fallback_channel, max_per_hour`,
+      [url, events, secret ?? null, webhookChannel, priority ?? 0, maxPerHour ?? null],
     );
 
     res.status(201).json(formatWebhook(rows[0]));
@@ -73,7 +87,7 @@ export async function createWebhook(req: Request, res: Response, next: NextFunct
 export async function listWebhooks(_req: Request, res: Response, next: NextFunction) {
   try {
     const rows = await query<WebhookRow>(
-      `SELECT id, url, events, active, created_at, consecutive_failures, channel, priority, fallback_channel
+      `SELECT id, url, events, active, created_at, consecutive_failures, channel, priority, fallback_channel, max_per_hour
        FROM webhooks
        WHERE active = TRUE
        ORDER BY priority ASC, created_at DESC`,

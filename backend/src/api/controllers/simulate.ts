@@ -4,8 +4,6 @@ import { z } from "zod";
 import {
   readTotalAssets,
   readFundingTarget,
-  readShareBalance,
-  readTotalSupply,
 } from "../../services/stellar.js";
 import { query } from "../../db/index.js";
 import { cacheGet, cacheSet } from "../../cache/redis.js";

@@ -9,6 +9,8 @@ const JOB_TYPES: Record<string, SendOptions> = {
   "indexer-backfill": { retryLimit: 5, retryDelay: 30, retryBackoff: false },
   "webhook-deliver": { retryLimit: 5, retryBackoff: true },
   "report-generate": { retryLimit: 2, retryDelay: 60, retryBackoff: false },
+  "document-accessibility-check": { retryLimit: 3, retryDelay: 60, retryBackoff: true },
+  "api-key-inactivity-sweep": { retryLimit: 3, retryDelay: 300, retryBackoff: false },
 };
 
 type JobTypeName = keyof typeof JOB_TYPES;
@@ -55,6 +57,21 @@ class JobQueue {
       logger.warn({ err }, "Could not register report-generate schedule on boss start");
     }
 
+    // Schedule daily document accessibility check at 02:00 UTC (#977)
+    try {
+      await this.boss.schedule("document-accessibility-check", "0 2 * * *", {});
+    } catch (err) {
+      logger.warn({ err }, "Could not register document-accessibility-check schedule on boss start");
+    }
+
+    // Schedule the daily API key inactivity sweep at 03:00 UTC (#934). The job
+    // itself is a no-op unless KEY_INACTIVITY_DAYS is configured.
+    try {
+      await this.boss.schedule("api-key-inactivity-sweep", "0 3 * * *", {});
+    } catch (err) {
+      logger.warn({ err }, "Could not register api-key-inactivity-sweep schedule on boss start");
+    }
+
     await this.boss.work<Record<string, unknown>>("webhook-deliver", async (jobs: Job<Record<string, unknown>>[]) => {
       const { processWebhookDelivery } = await import("./webhookWorker.js");
       for (const job of jobs) {
@@ -94,6 +111,24 @@ class JobQueue {
       for (const _job of jobs) {
         await runWithMetrics("report-generate", async () => {
           await generateVaultReports();
+        });
+      }
+    });
+
+    await this.boss.work<Record<string, unknown>>("document-accessibility-check", async (jobs: Job<Record<string, unknown>>[]) => {
+      const { processDocumentAccessibilityCheck } = await import("./documentAccessibilityWorker.js");
+      for (const _job of jobs) {
+        await runWithMetrics("document-accessibility-check", async () => {
+          await processDocumentAccessibilityCheck();
+        });
+      }
+    });
+
+    await this.boss.work<Record<string, unknown>>("api-key-inactivity-sweep", async (jobs: Job<Record<string, unknown>>[]) => {
+      const { deactivateInactiveApiKeys } = await import("./apiKeyInactivity.js");
+      for (const _job of jobs) {
+        await runWithMetrics("api-key-inactivity-sweep", async () => {
+          await deactivateInactiveApiKeys();
         });
       }
     });

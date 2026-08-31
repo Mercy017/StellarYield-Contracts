@@ -205,6 +205,27 @@ POST /api/v1/webhooks
 `GET /api/v1/webhooks` returns `priority` (and `fallbackChannel`) on every row, and lists
 webhooks in priority order.
 
+## Per-Event Throttling
+
+A webhook may set `maxPerHour`, an integer cap on how many deliveries it receives within
+a single clock hour (UTC). A high-volume vault can emit hundreds of events per hour;
+without a cap the webhook endpoint is flooded.
+
+```json
+POST /api/v1/webhooks
+{
+  "url": "https://example.com/hook",
+  "events": ["deposit"],
+  "maxPerHour": 60
+}
+```
+
+Omit `maxPerHour` (or send `null`) for no limit. The delivery count is tracked per
+webhook per hour in Redis. Once it exceeds `maxPerHour`, further events in that hour are
+skipped (a warning is logged; the skip is **not** counted as a delivery failure). The
+counter resets automatically at the top of the next hour. If Redis is unavailable the
+throttle fails open and all events are delivered.
+
 ## Failure Escalation
 
 A webhook may reference another webhook row via `fallback_channel`. After the primary
