@@ -19,6 +19,7 @@ interface AdminSessionClaims extends JwtPayload {
   role?: string;
   type?: string;
   sub?: string;
+  allowedMethods?: string[] | null;
 }
 
 declare module "express-serve-static-core" {
@@ -46,6 +47,15 @@ function touchLastUsed(req: Request, apiKey: ApiKey): void {
       logger.warn({ err, keyId: apiKey.id }, "Failed to update api_keys.last_used_at");
     },
   );
+}
+
+/**
+ * Per-key HTTP method scope (#935): a NULL/absent list means every method is
+ * allowed, which is how every pre-existing key behaves.
+ */
+function isMethodAllowed(apiKey: Pick<ApiKey, "allowedMethods">, method: string): boolean {
+  if (!apiKey.allowedMethods) return true;
+  return apiKey.allowedMethods.some((allowed) => allowed.toUpperCase() === method.toUpperCase());
 }
 
 function getClientIp(req: Request): string {
@@ -95,11 +105,13 @@ function verifyAdminSession(token: string): ApiKey | null {
     lastUsedAt: null,
     // A session can only exist because an active key authenticated the login.
     active: true,
-    allowedMethods: null,
+    allowedMethods: Array.isArray(claims.allowedMethods) ? claims.allowedMethods : null,
   };
 }
 
-export function createAdminSessionToken(apiKey: Pick<ApiKey, "id" | "role" | "label">): string {
+export function createAdminSessionToken(
+  apiKey: Pick<ApiKey, "id" | "role" | "label" | "allowedMethods">,
+): string {
   const secret = config.adminJwtSecret;
   const expiresInMinutes = config.adminSessionExpiryMinutes;
 
@@ -109,6 +121,7 @@ export function createAdminSessionToken(apiKey: Pick<ApiKey, "id" | "role" | "la
       role: apiKey.role,
       type: "admin_session",
       label: apiKey.label ?? null,
+      allowedMethods: apiKey.allowedMethods ?? null,
     },
     secret,
     { expiresIn: `${expiresInMinutes}m` },
@@ -129,6 +142,7 @@ export function refreshAdminSessionToken(token: string): string {
       role: claims.role,
       type: "admin_session",
       label: claims.label ?? null,
+      allowedMethods: claims.allowedMethods ?? null,
     },
     secret,
     { expiresIn: `${config.adminSessionExpiryMinutes}m` },
@@ -160,6 +174,23 @@ export function requireApiKey(options?: { role?: string; minRole?: "readonly" | 
             reason: "expired",
           });
           res.status(401).json({ error: "Unauthorized", message: "JWT expired" });
+          return;
+        }
+
+        if (!isMethodAllowed(sessionApiKey, req.method)) {
+          logger.info({
+            event: "auth_attempt",
+            success: false,
+            ip,
+            keyLabel: sessionApiKey.label,
+            path: req.path,
+            method: req.method,
+            reason: "method_not_allowed",
+          });
+          res.status(403).json({
+            error: "Forbidden",
+            message: `API key is not permitted to use the ${req.method} method`,
+          });
           return;
         }
 
@@ -267,10 +298,7 @@ export function requireApiKey(options?: { role?: string; minRole?: "readonly" | 
       return;
     }
 
-    // Per-key HTTP method scope (#935): a NULL column means every method is
-    // allowed, which is how every pre-existing key behaves.
-    const allowedMethods = apiKey.allowedMethods?.map((method) => method.toUpperCase());
-    if (allowedMethods && !allowedMethods.includes(req.method.toUpperCase())) {
+    if (!isMethodAllowed(apiKey, req.method)) {
       logger.info({
         event: "auth_attempt",
         success: false,

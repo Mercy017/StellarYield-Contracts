@@ -41,10 +41,26 @@ async function logAdminAudit(req: Request, action: string, target: string): Prom
   );
 }
 
-async function findApiKeyByValue(plaintext: string): Promise<{ id: number; role: string; label: string | null; expiresAt: Date | null } | null> {
+interface ApiKeyRecord {
+  id: number;
+  role: string;
+  label: string | null;
+  expiresAt: Date | null;
+  active: boolean;
+  allowedMethods: string[] | null;
+}
+
+async function findApiKeyByValue(plaintext: string): Promise<ApiKeyRecord | null> {
   const keyHash = createHash("sha256").update(plaintext).digest("hex");
-  const rows = await query<{ id: number; role: string; label: string | null; expires_at: Date | null }>(
-    'SELECT id, role, label, expires_at FROM api_keys WHERE key_hash = $1',
+  const rows = await query<{
+    id: number;
+    role: string;
+    label: string | null;
+    expires_at: Date | null;
+    active: boolean | null;
+    allowed_methods: string[] | null;
+  }>(
+    'SELECT id, role, label, expires_at, active, allowed_methods FROM api_keys WHERE key_hash = $1',
     [keyHash],
   ).catch(() => []);
 
@@ -55,6 +71,8 @@ async function findApiKeyByValue(plaintext: string): Promise<{ id: number; role:
     role: row.role,
     label: row.label,
     expiresAt: row.expires_at,
+    active: row.active ?? true,
+    allowedMethods: row.allowed_methods ?? null,
   };
 }
 
@@ -72,6 +90,13 @@ export async function createAdminSession(req: Request, res: Response, next: Next
       return;
     }
 
+    // A session must never outlive the key it is minted from, so the same
+    // lifecycle checks the auth middleware applies run here too (#934).
+    if (!apiKey.active) {
+      res.status(403).json({ error: "Forbidden", message: "API key has been deactivated" });
+      return;
+    }
+
     if (apiKey.role !== "admin") {
       res.status(403).json({ error: "Forbidden", message: "Admin API key required" });
       return;
@@ -81,6 +106,14 @@ export async function createAdminSession(req: Request, res: Response, next: Next
       res.status(401).json({ error: "Unauthorized", message: "API key has expired" });
       return;
     }
+
+    // Exchanging a key for a session is an authentication, so it counts as use
+    // and must not reset the inactivity clock silently (#933).
+    void query("UPDATE api_keys SET last_used_at = NOW() WHERE id = $1", [apiKey.id]).catch(
+      (err: unknown) => {
+        logger.warn({ err, keyId: apiKey.id }, "Failed to update api_keys.last_used_at");
+      },
+    );
 
     const token = createAdminSessionToken(apiKey);
     res.json({ token, expiresInMinutes: config.adminSessionExpiryMinutes });
